@@ -1,26 +1,19 @@
 import { Link } from 'react-router-dom';
 import {
   Crown, ArrowRight, Share2, Store, Zap, TrendingUp, Users, Shield,
-  Star, ChevronRight, DollarSign, Package, BarChart3,
+  ChevronRight, DollarSign, Package, BarChart3,
 } from 'lucide-react';
-import { formatINRCompact } from '../../lib/format';
 
-const stats = [
-  { label: 'Active Users', value: '50,000+', icon: <Users className="w-5 h-5" /> },
-  { label: 'Products Listed', value: '10,000+', icon: <Package className="w-5 h-5" /> },
-  { label: 'Payouts This Month', value: formatINRCompact(12500000), icon: <DollarSign className="w-5 h-5" /> },
+const platformHighlights = [
+  { label: 'Affiliate to SaaS', sub: 'One account, multiple ways to earn', icon: <Users className="w-5 h-5" /> },
+  { label: 'Dashboards', sub: 'Orders, wallet, and referrals in one place', icon: <BarChart3 className="w-5 h-5" /> },
+  { label: 'Payouts', sub: 'Withdraw to your bank after verification', icon: <DollarSign className="w-5 h-5" /> },
 ];
 
 const steps = [
   { step: '01', title: 'Choose Your Role', desc: 'Sign up as an Affiliate, Reseller, Vendor, or SaaS Owner based on your goals.', icon: <Users className="w-6 h-6" /> },
   { step: '02', title: 'Start Earning', desc: 'Share links, resell products, or list your own inventory. Commissions are instant.', icon: <TrendingUp className="w-6 h-6" /> },
   { step: '03', title: 'Withdraw Profits', desc: 'Track earnings in real-time and withdraw directly to your bank account.', icon: <DollarSign className="w-6 h-6" /> },
-];
-
-const testimonials = [
-  { name: 'Priya S.', role: 'Affiliate', quote: 'I earn over 30,000 per month just by sharing product links on WhatsApp. The platform makes it so simple!', stars: 5 },
-  { name: 'Rahul M.', role: 'Vendor', quote: 'Listed 50 products and already sold 200+ units. The affiliate network drives amazing traffic to my store.', stars: 5 },
-  { name: 'Anjali K.', role: 'SaaS Owner', quote: 'Launched my own branded commerce platform in under a week. The white-label solution is incredible value.', stars: 5 },
 ];
 
 export function LandingPage() {
@@ -94,15 +87,15 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* Live Stats Bar */}
+      {/* Platform highlights */}
       <section className="bg-navy-900 py-6">
         <div className="max-w-5xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-center gap-8 sm:gap-16">
-          {stats.map((s) => (
-            <div key={s.label} className="flex items-center gap-3 text-white">
-              <div className="p-2 bg-accent-500/20 rounded-lg text-accent-400">{s.icon}</div>
+          {platformHighlights.map((s) => (
+            <div key={s.label} className="flex items-center gap-3 text-white max-w-xs">
+              <div className="p-2 bg-accent-500/20 rounded-lg text-accent-400 shrink-0">{s.icon}</div>
               <div>
-                <p className="text-xl font-bold">{s.value}</p>
-                <p className="text-xs text-navy-400">{s.label}</p>
+                <p className="text-sm font-semibold">{s.label}</p>
+                <p className="text-xs text-navy-400">{s.sub}</p>
               </div>
             </div>
           ))}
@@ -174,34 +167,13 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* Testimonials */}
-      <section className="py-20 px-4 bg-navy-50">
-        <div className="max-w-5xl mx-auto">
-          <div className="text-center mb-14">
-            <h2 className="text-3xl sm:text-4xl font-bold text-navy-900 mb-3">Loved by Thousands</h2>
-            <p className="text-navy-500 text-lg">Real stories from real earners</p>
-          </div>
-          <div className="grid md:grid-cols-3 gap-6">
-            {testimonials.map((t) => (
-              <div key={t.name} className="bg-white rounded-2xl p-6 border border-navy-100 shadow-sm">
-                <div className="flex gap-1 mb-4">
-                  {Array.from({ length: t.stars }).map((_, i) => (
-                    <Star key={i} className="w-4 h-4 fill-accent-400 text-accent-400" />
-                  ))}
-                </div>
-                <p className="text-navy-600 leading-relaxed mb-4">"{t.quote}"</p>
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-accent-100 flex items-center justify-center text-accent-600 font-semibold text-sm">
-                    {t.name.charAt(0)}
-                  </div>
-                  <div>
-                    <p className="font-semibold text-navy-900 text-sm">{t.name}</p>
-                    <p className="text-xs text-navy-500">{t.role}</p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+      {/* Trust */}
+      <section className="py-16 px-4 bg-navy-50">
+        <div className="max-w-3xl mx-auto text-center">
+          <h2 className="text-2xl sm:text-3xl font-bold text-navy-900 mb-4">Built for serious earners</h2>
+          <p className="text-navy-500 leading-relaxed">
+            Complete KYC, pick your role, and manage orders, wallet, and referrals from your dashboard. Your metrics reflect your real activity on the platform.
+          </p>
         </div>
       </section>
 
@@ -209,7 +181,7 @@ export function LandingPage() {
       <section className="py-20 px-4">
         <div className="max-w-3xl mx-auto text-center">
           <h2 className="text-3xl sm:text-4xl font-bold text-navy-900 mb-4">Ready to Start Earning?</h2>
-          <p className="text-navy-500 text-lg mb-8">Join 50,000+ users already building their online income with UCMP.</p>
+          <p className="text-navy-500 text-lg mb-8">Create a free account and start from your dashboard with real data for your activity.</p>
           <Link
             to="/signup"
             className="inline-flex items-center gap-2 px-10 py-4 bg-accent-500 hover:bg-accent-600 text-white font-semibold rounded-xl transition-all shadow-lg shadow-accent-500/25 text-lg group"

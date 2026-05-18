@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -13,12 +13,24 @@ const roles: { role: Role; desc: string }[] = [
   { role: 'SAAS_OWNER', desc: 'Launch your own white-label store' },
 ];
 
+const URL_SIGNUP_ROLES = new Set<Role>(['AFFILIATE', 'RESELLER', 'VENDOR', 'SAAS_OWNER']);
+
+function roleFromSearchParam(raw: string | null): Role {
+  if (!raw) return 'AFFILIATE';
+  const upper = raw.trim().toUpperCase();
+  return URL_SIGNUP_ROLES.has(upper as Role) ? (upper as Role) : 'AFFILIATE';
+}
+
 export function SignupPage() {
   const [searchParams] = useSearchParams();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<Role>('AFFILIATE');
+  const [role, setRole] = useState<Role>(() => roleFromSearchParam(searchParams.get('role')));
+
+  useEffect(() => {
+    setRole(roleFromSearchParam(searchParams.get('role')));
+  }, [searchParams]);
   const [referralCode, setReferralCode] = useState(searchParams.get('ref') || '');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -31,9 +43,14 @@ export function SignupPage() {
     if (!name || !email || !password) { toast('Please fill all required fields', 'error'); return; }
     if (password.length < 6) { toast('Password must be at least 6 characters', 'error'); return; }
     setLoading(true);
-    const { error } = await signUp(email, password, name, role, referralCode || undefined);
+    const { error, needsEmailVerification } = await signUp(email, password, name, role, referralCode || undefined);
     setLoading(false);
     if (error) { toast(error, 'error'); return; }
+    if (needsEmailVerification) {
+      toast('Check your email to confirm your account, then sign in.', 'info');
+      navigate('/login');
+      return;
+    }
     toast('Account created successfully!');
     navigate('/dashboard');
   };

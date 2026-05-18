@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Crown, Trophy, Medal, Star, TrendingUp } from 'lucide-react';
+import { Crown, Trophy, Medal, Star, TrendingUp, LayoutDashboard } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { formatINR, maskName } from '../../lib/format';
 import { Skeleton } from '../../components/ui/LoadingSkeleton';
@@ -32,6 +33,7 @@ const rankIcons = [
 ];
 
 export function LeaderboardPage() {
+  const { user } = useAuth();
   const [entries, setEntries] = useState<LeaderEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -50,7 +52,7 @@ export function LeaderboardPage() {
 
     if (data) {
       setEntries(
-        data.map((d: any, i: number) => ({
+        data.map((d: { id: string; user_id: string; month: string; earnings: number; profiles?: { name?: string } }, i: number) => ({
           id: d.id,
           user_id: d.user_id,
           month: d.month,
@@ -63,21 +65,6 @@ export function LeaderboardPage() {
     setLoading(false);
   }
 
-  const demoEntries: LeaderEntry[] = [
-    { id: '1', user_id: '1', month: '', earnings: 187500, rank: 1, user_name: 'Rajesh Kumar' },
-    { id: '2', user_id: '2', month: '', earnings: 156200, rank: 2, user_name: 'Priya Sharma' },
-    { id: '3', user_id: '3', month: '', earnings: 134800, rank: 3, user_name: 'Amit Patel' },
-    { id: '4', user_id: '4', month: '', earnings: 112000, rank: 4, user_name: 'Sneha Reddy' },
-    { id: '5', user_id: '5', month: '', earnings: 98500, rank: 5, user_name: 'Vikram Singh' },
-    { id: '6', user_id: '6', month: '', earnings: 87200, rank: 6, user_name: 'Ananya Iyer' },
-    { id: '7', user_id: '7', month: '', earnings: 76800, rank: 7, user_name: 'Deepak Joshi' },
-    { id: '8', user_id: '8', month: '', earnings: 65400, rank: 8, user_name: 'Kavita Nair' },
-    { id: '9', user_id: '9', month: '', earnings: 54100, rank: 9, user_name: 'Manish Gupta' },
-    { id: '10', user_id: '10', month: '', earnings: 43200, rank: 10, user_name: 'Ritu Verma' },
-  ];
-
-  const displayEntries = entries.length > 0 ? entries : demoEntries;
-
   return (
     <div className="min-h-screen bg-white">
       <nav className="fixed top-0 inset-x-0 z-50 bg-white/80 backdrop-blur-xl border-b border-navy-100">
@@ -88,9 +75,19 @@ export function LeaderboardPage() {
             </div>
             <span className="text-xl font-bold text-navy-900">UCMP</span>
           </Link>
-          <Link to="/signup" className="text-sm font-semibold text-white bg-accent-500 hover:bg-accent-600 px-5 py-2.5 rounded-xl transition-all">
-            Join Now
-          </Link>
+          {user ? (
+            <Link
+              to="/dashboard"
+              className="inline-flex items-center gap-2 text-sm font-semibold text-white bg-accent-500 hover:bg-accent-600 px-5 py-2.5 rounded-xl transition-all"
+            >
+              <LayoutDashboard className="w-4 h-4" />
+              Dashboard
+            </Link>
+          ) : (
+            <Link to="/signup" className="text-sm font-semibold text-white bg-accent-500 hover:bg-accent-600 px-5 py-2.5 rounded-xl transition-all">
+              Join Now
+            </Link>
+          )}
         </div>
       </nav>
 
@@ -110,9 +107,14 @@ export function LeaderboardPage() {
                 <Skeleton key={i} className="h-16 rounded-xl" />
               ))}
             </div>
+          ) : entries.length === 0 ? (
+            <div className="text-center py-12 px-4 rounded-xl border border-navy-100 bg-navy-50/50">
+              <p className="text-navy-700 font-medium">No leaderboard data for this month yet.</p>
+              <p className="text-sm text-navy-500 mt-2">Check back once earnings are recorded for {new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' })}.</p>
+            </div>
           ) : (
             <div className="space-y-3">
-              {displayEntries.map((entry, index) => {
+              {entries.map((entry, index) => {
                 const badge = getBadge(entry.earnings);
                 return (
                   <div
@@ -150,16 +152,18 @@ export function LeaderboardPage() {
             </div>
           )}
 
-          <div className="text-center mt-10">
-            <p className="text-navy-500 mb-4">Want to see your name here?</p>
-            <Link
-              to="/signup"
-              className="inline-flex items-center gap-2 px-8 py-3 bg-accent-500 hover:bg-accent-600 text-white font-semibold rounded-xl transition-all"
-            >
-              <Star className="w-5 h-5" />
-              Start Earning Today
-            </Link>
-          </div>
+          {!user && (
+            <div className="text-center mt-10">
+              <p className="text-navy-500 mb-4">Want to see your name here?</p>
+              <Link
+                to="/signup"
+                className="inline-flex items-center gap-2 px-8 py-3 bg-accent-500 hover:bg-accent-600 text-white font-semibold rounded-xl transition-all"
+              >
+                <Star className="w-5 h-5" />
+                Start Earning Today
+              </Link>
+            </div>
+          )}
         </div>
       </section>
     </div>

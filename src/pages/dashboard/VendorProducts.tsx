@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, type Dispatch, type SetStateAction, type FormEvent } from 'react';
 import { Plus, Search, Pencil, Trash2, Power, Package, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -13,6 +13,61 @@ import type { Product } from '../../types';
 const CATEGORIES = ['Electronics', 'Fashion', 'Home', 'Health', 'Food', 'Books', 'Other'];
 const PER_PAGE = 20;
 const emptyForm = { name: '', description: '', price: '', mrp: '', stock: '', category: 'Electronics' };
+
+type ProductFormState = typeof emptyForm;
+
+function VendorProductField({
+  label,
+  name,
+  type = 'text',
+  el,
+  form,
+  setForm,
+  errors,
+}: {
+  label: string;
+  name: keyof ProductFormState;
+  type?: string;
+  el?: 'textarea' | 'select';
+  form: ProductFormState;
+  setForm: Dispatch<SetStateAction<ProductFormState>>;
+  errors: Record<string, string>;
+}) {
+  const value = form[name];
+  return (
+    <div>
+      <label className="block text-sm font-medium text-navy-700 mb-1">{label}</label>
+      {el === 'textarea' ? (
+        <textarea
+          rows={3}
+          value={value}
+          onChange={(e) => setForm((prev) => ({ ...prev, [name]: e.target.value }))}
+          className="w-full rounded-lg border border-navy-200 px-3 py-2 text-sm text-navy-900 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+        />
+      ) : el === 'select' ? (
+        <select
+          value={value}
+          onChange={(e) => setForm((prev) => ({ ...prev, [name]: e.target.value }))}
+          className="w-full rounded-lg border border-navy-200 px-3 py-2 text-sm text-navy-900 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+        >
+          {CATEGORIES.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input
+          type={type}
+          value={value}
+          onChange={(e) => setForm((prev) => ({ ...prev, [name]: e.target.value }))}
+          className="w-full rounded-lg border border-navy-200 px-3 py-2 text-sm text-navy-900 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+        />
+      )}
+      {errors[name] && <p className="text-xs text-red-500 mt-1">{errors[name]}</p>}
+    </div>
+  );
+}
 
 export function VendorProducts() {
   const { user } = useAuth();
@@ -69,7 +124,7 @@ export function VendorProducts() {
     setModalOpen(true);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!validate() || !user) return;
     setSubmitting(true);
@@ -106,25 +161,6 @@ export function VendorProducts() {
     toast('Product deleted', 'success');
     fetchProducts();
   };
-
-  const Field = ({ label, name, type = 'text', el }: { label: string; name: string; type?: string; el?: 'textarea' | 'select' }) => (
-    <div>
-      <label className="block text-sm font-medium text-navy-700 mb-1">{label}</label>
-      {el === 'textarea' ? (
-        <textarea rows={3} value={(form as Record<string, string>)[name]} onChange={(e) => setForm({ ...form, [name]: e.target.value })}
-          className="w-full rounded-lg border border-navy-200 px-3 py-2 text-sm text-navy-900 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
-      ) : el === 'select' ? (
-        <select value={(form as Record<string, string>)[name]} onChange={(e) => setForm({ ...form, [name]: e.target.value })}
-          className="w-full rounded-lg border border-navy-200 px-3 py-2 text-sm text-navy-900 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">
-          {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-      ) : (
-        <input type={type} value={(form as Record<string, string>)[name]} onChange={(e) => setForm({ ...form, [name]: e.target.value })}
-          className="w-full rounded-lg border border-navy-200 px-3 py-2 text-sm text-navy-900 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
-      )}
-      {errors[name] && <p className="text-xs text-red-500 mt-1">{errors[name]}</p>}
-    </div>
-  );
 
   return (
     <div className="space-y-6">
@@ -209,14 +245,14 @@ export function VendorProducts() {
       {/* Add / Edit Modal */}
       <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editingId ? 'Edit Product' : 'Add Product'} size="lg">
         <form onSubmit={handleSubmit} className="space-y-4">
-          <Field label="Product Name" name="name" />
-          <Field label="Description" name="description" el="textarea" />
+          <VendorProductField label="Product Name" name="name" form={form} setForm={setForm} errors={errors} />
+          <VendorProductField label="Description" name="description" el="textarea" form={form} setForm={setForm} errors={errors} />
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <Field label="Base Price" name="price" type="number" />
-            <Field label="MRP" name="mrp" type="number" />
-            <Field label="Stock" name="stock" type="number" />
+            <VendorProductField label="Base Price" name="price" type="number" form={form} setForm={setForm} errors={errors} />
+            <VendorProductField label="MRP" name="mrp" type="number" form={form} setForm={setForm} errors={errors} />
+            <VendorProductField label="Stock" name="stock" type="number" form={form} setForm={setForm} errors={errors} />
           </div>
-          <Field label="Category" name="category" el="select" />
+          <VendorProductField label="Category" name="category" el="select" form={form} setForm={setForm} errors={errors} />
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={() => setModalOpen(false)} className="px-4 py-2.5 rounded-lg border border-navy-200 text-sm font-medium text-navy-700 hover:bg-navy-50 transition-colors">
               Cancel

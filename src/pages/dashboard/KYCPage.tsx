@@ -46,9 +46,9 @@ export function KYCPage() {
       setKyc(data);
       setForm({
         pan_number: data.pan_number || '',
-        aadhaar_number: data.aadhaar_number || '',
-        bank_account_number: data.bank_account_number || '',
-        ifsc_code: data.ifsc_code || '',
+        aadhaar_number: data.aadhar_no || '',
+        bank_account_number: data.bank_acc_no || '',
+        ifsc_code: data.ifsc || '',
         gst_number: data.gst_number || '',
       });
     }
@@ -74,15 +74,15 @@ export function KYCPage() {
     const payload = {
       user_id: user!.id,
       pan_number: form.pan_number.toUpperCase(),
-      aadhaar_number: form.aadhaar_number,
-      bank_account_number: form.bank_account_number.trim(),
-      ifsc_code: form.ifsc_code.toUpperCase(),
+      aadhar_no: form.aadhaar_number,
+      bank_acc_no: form.bank_account_number.trim(),
+      ifsc: form.ifsc_code.toUpperCase(),
       gst_number: form.gst_number.trim() || null,
-      status: 'pending',
+      status: 'pending' as const,
     };
     const { error } = await supabase.from('kyc').upsert(payload, { onConflict: 'user_id' });
     if (error) {
-      toast('Failed to submit KYC. Please try again.', 'error');
+      toast(error.message || 'Failed to submit KYC. Please try again.', 'error');
     } else {
       toast('KYC submitted successfully', 'success');
       await fetchKyc();

@@ -8,38 +8,59 @@ import { DashboardSkeleton } from '../../../components/ui/LoadingSkeleton';
 
 const ORANGE = '#F97316';
 
-const demoDailyGMV = Array.from({ length: 30 }, (_, i) => {
-  const d = new Date();
-  d.setDate(d.getDate() - 29 + i);
-  return {
-    date: d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
-    gmv: Math.floor(Math.random() * 50000) + 10000,
-  };
-});
+const TX_TYPE_LABEL: Record<string, string> = {
+  commission: 'Commission',
+  withdrawal: 'Withdrawal',
+  refund: 'Refund',
+  bonus: 'Bonus',
+  subscription: 'Subscription',
+};
 
-const demoCommissionPayouts = [
-  { type: 'Direct Sale', amount: 125000 },
-  { type: 'Team Override', amount: 78000 },
-  { type: 'Leadership', amount: 45000 },
-  { type: 'Bonus', amount: 32000 },
-];
+function buildLast30DaysGMVRows(
+  orders: { created_at: string; total_amount: number | null }[]
+): { date: string; gmv: number }[] {
+  const start = new Date();
+  start.setDate(start.getDate() - 29);
+  start.setHours(0, 0, 0, 0);
+  const buckets = new Map<string, number>();
+  for (let i = 0; i < 30; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    buckets.set(d.toISOString().slice(0, 10), 0);
+  }
+  for (const o of orders) {
+    const k = o.created_at?.slice(0, 10);
+    if (k && buckets.has(k)) buckets.set(k, buckets.get(k)! + (o.total_amount || 0));
+  }
+  return [...buckets.entries()].map(([iso, gmv]) => ({
+    date: new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
+    gmv,
+  }));
+}
 
 export function AdminAnalytics() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ users: 0, gmv: 0, revenue: 0, tenants: 0 });
-  const [dailyGMV] = useState(demoDailyGMV);
+  const [dailyGMV, setDailyGMV] = useState<{ date: string; gmv: number }[]>([]);
+  const [commissionPayouts, setCommissionPayouts] = useState<{ type: string; amount: number }[]>([]);
   const [topEarners, setTopEarners] = useState<{ name: string; earnings: number }[]>([]);
   const [topProducts, setTopProducts] = useState<{ name: string; sold: number }[]>([]);
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
-      const [usersRes, tenantsRes, ordersRes, earnerRes, productsRes] = await Promise.all([
+      const start30 = new Date();
+      start30.setDate(start30.getDate() - 29);
+      start30.setHours(0, 0, 0, 0);
+
+      const [usersRes, tenantsRes, ordersRes, orders30Res, txRes, walletRes, orderLinesRes] = await Promise.all([
         supabase.from('profiles').select('*', { count: 'exact', head: true }),
-        supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'tenant').eq('is_active', true),
+        supabase.from('saas_tenants').select('*', { count: 'exact', head: true }).eq('is_active', true),
         supabase.from('orders').select('total_amount'),
-        supabase.from('profiles').select('name, wallet_balance').order('wallet_balance', { ascending: false }).limit(5),
-        supabase.from('order_items').select('product_name, quantity').order('quantity', { ascending: false }).limit(5),
+        supabase.from('orders').select('created_at, total_amount').gte('created_at', start30.toISOString()),
+        supabase.from('transactions').select('type, amount').eq('status', 'completed'),
+        supabase.from('wallets').select('total_earned, profiles(name)').order('total_earned', { ascending: false }).limit(5),
+        supabase.from('orders').select('quantity, products(name)'),
       ]);
 
       const totalGMV = (ordersRes.data || []).reduce((s, o) => s + (o.total_amount || 0), 0);
@@ -51,29 +72,30 @@ export function AdminAnalytics() {
         tenants: tenantsRes.count || 0,
       });
 
-      if (earnerRes.data?.length) {
-        setTopEarners(earnerRes.data.map((e) => ({ name: e.name || 'Unknown', earnings: e.wallet_balance || 0 })));
-      } else {
-        setTopEarners([
-          { name: 'Rahul Sharma', earnings: 48500 },
-          { name: 'Priya Patel', earnings: 42300 },
-          { name: 'Amit Kumar', earnings: 38900 },
-          { name: 'Sneha Reddy', earnings: 31200 },
-          { name: 'Vikram Singh', earnings: 27800 },
-        ]);
-      }
+      setDailyGMV(buildLast30DaysGMVRows(orders30Res.data || []));
 
-      if (productsRes.data?.length) {
-        setTopProducts(productsRes.data.map((p) => ({ name: p.product_name || 'Unknown', sold: p.quantity || 0 })));
-      } else {
-        setTopProducts([
-          { name: 'Herbal Face Wash', sold: 342 },
-          { name: 'Protein Supplement', sold: 289 },
-          { name: 'Immunity Booster', sold: 256 },
-          { name: 'Hair Growth Oil', sold: 198 },
-          { name: 'Green Tea Extract', sold: 175 },
-        ]);
+      const payoutMap = new Map<string, number>();
+      for (const t of txRes.data || []) {
+        const label = TX_TYPE_LABEL[t.type] || t.type;
+        payoutMap.set(label, (payoutMap.get(label) || 0) + (t.amount || 0));
       }
+      setCommissionPayouts([...payoutMap.entries()].map(([type, amount]) => ({ type, amount })));
+
+      const earners: { name: string; earnings: number }[] = [];
+      for (const row of walletRes.data || []) {
+        const prof = row.profiles as { name?: string } | null;
+        earners.push({ name: prof?.name || 'Unknown', earnings: row.total_earned || 0 });
+      }
+      setTopEarners(earners);
+
+      const prodMap = new Map<string, number>();
+      for (const row of orderLinesRes.data || []) {
+        const prod = row.products as { name?: string } | null;
+        const name = prod?.name || 'Unknown';
+        prodMap.set(name, (prodMap.get(name) || 0) + (row.quantity || 0));
+      }
+      const top = [...prodMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, sold]) => ({ name, sold }));
+      setTopProducts(top);
 
       setLoading(false);
     };
@@ -94,71 +116,87 @@ export function AdminAnalytics() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <h2 className="text-sm font-semibold text-slate-900 mb-4">Daily GMV (Last 30 Days)</h2>
-          <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={dailyGMV}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-              <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#64748B' }} />
-              <YAxis tick={{ fontSize: 11, fill: '#64748B' }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-              <Tooltip formatter={(v: any) => [formatINR(v), 'GMV']} />
-              <Line type="monotone" dataKey="gmv" stroke={ORANGE} strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+          {dailyGMV.length === 0 || dailyGMV.every((d) => d.gmv === 0) ? (
+            <p className="text-sm text-slate-500 py-16 text-center">No order volume in the last 30 days.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={dailyGMV}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#64748B' }} />
+                <YAxis tick={{ fontSize: 11, fill: '#64748B' }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                <Tooltip formatter={(v) => [formatINR(Number(v)), 'GMV']} />
+                <Line type="monotone" dataKey="gmv" stroke={ORANGE} strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-5">
-          <h2 className="text-sm font-semibold text-slate-900 mb-4">Commission Payouts by Type</h2>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={demoCommissionPayouts}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-              <XAxis dataKey="type" tick={{ fontSize: 11, fill: '#64748B' }} />
-              <YAxis tick={{ fontSize: 11, fill: '#64748B' }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-              <Tooltip formatter={(v: any) => [formatINR(v), 'Amount']} />
-              <Bar dataKey="amount" fill={ORANGE} radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <h2 className="text-sm font-semibold text-slate-900 mb-4">Completed transactions by type</h2>
+          {commissionPayouts.length === 0 ? (
+            <p className="text-sm text-slate-500 py-16 text-center">No completed transactions to chart yet.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={commissionPayouts}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                <XAxis dataKey="type" tick={{ fontSize: 11, fill: '#64748B' }} />
+                <YAxis tick={{ fontSize: 11, fill: '#64748B' }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                <Tooltip formatter={(v) => [formatINR(Number(v)), 'Amount']} />
+                <Bar dataKey="amount" fill={ORANGE} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-xl border border-slate-200 p-5">
-          <h2 className="text-sm font-semibold text-slate-900 mb-4">Top 5 Earning Users</h2>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-200">
-                <th className="text-left py-2 font-semibold text-slate-900">#</th>
-                <th className="text-left py-2 font-semibold text-slate-900">Name</th>
-                <th className="text-right py-2 font-semibold text-slate-900">Earnings</th>
-              </tr>
-            </thead>
-            <tbody>
-              {topEarners.map((u, i) => (
-                <tr key={i} className="border-b border-slate-100">
-                  <td className="py-2 text-slate-500">{i + 1}</td>
-                  <td className="py-2 text-slate-900 font-medium">{u.name}</td>
-                  <td className="py-2 text-right text-slate-900">{formatINR(u.earnings)}</td>
+          <h2 className="text-sm font-semibold text-slate-900 mb-4">Top 5 by wallet (total earned)</h2>
+          {topEarners.length === 0 ? (
+            <p className="text-sm text-slate-500 py-8 text-center">No wallet data yet.</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200">
+                  <th className="text-left py-2 font-semibold text-slate-900">#</th>
+                  <th className="text-left py-2 font-semibold text-slate-900">Name</th>
+                  <th className="text-right py-2 font-semibold text-slate-900">Total earned</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {topEarners.map((u, i) => (
+                  <tr key={i} className="border-b border-slate-100">
+                    <td className="py-2 text-slate-500">{i + 1}</td>
+                    <td className="py-2 text-slate-900 font-medium">{u.name}</td>
+                    <td className="py-2 text-right text-slate-900">{formatINR(u.earnings)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-5">
-          <h2 className="text-sm font-semibold text-slate-900 mb-4">Top 5 Selling Products</h2>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-200">
-                <th className="text-left py-2 font-semibold text-slate-900">#</th>
-                <th className="text-left py-2 font-semibold text-slate-900">Product</th>
-                <th className="text-right py-2 font-semibold text-slate-900">Units Sold</th>
-              </tr>
-            </thead>
-            <tbody>
-              {topProducts.map((p, i) => (
-                <tr key={i} className="border-b border-slate-100">
-                  <td className="py-2 text-slate-500">{i + 1}</td>
-                  <td className="py-2 text-slate-900 font-medium">{p.name}</td>
-                  <td className="py-2 text-right text-slate-900">{p.sold.toLocaleString('en-IN')}</td>
+          <h2 className="text-sm font-semibold text-slate-900 mb-4">Top selling products (by units in orders)</h2>
+          {topProducts.length === 0 ? (
+            <p className="text-sm text-slate-500 py-8 text-center">No order line data yet.</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200">
+                  <th className="text-left py-2 font-semibold text-slate-900">#</th>
+                  <th className="text-left py-2 font-semibold text-slate-900">Product</th>
+                  <th className="text-right py-2 font-semibold text-slate-900">Units sold</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {topProducts.map((p, i) => (
+                  <tr key={i} className="border-b border-slate-100">
+                    <td className="py-2 text-slate-500">{i + 1}</td>
+                    <td className="py-2 text-slate-900 font-medium">{p.name}</td>
+                    <td className="py-2 text-right text-slate-900">{p.sold.toLocaleString('en-IN')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>

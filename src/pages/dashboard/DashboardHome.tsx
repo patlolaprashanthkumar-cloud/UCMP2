@@ -18,43 +18,37 @@ interface DashboardStats {
   wallet: Wallet | null;
 }
 
-const DEMO_CHALLENGES: ChallengeProgress[] = [
-  { id: '1', user_id: '', challenge_id: '1', current_value: 3, is_completed: false, reward_claimed: false, created_at: '', challenge: { id: '1', title: 'Share 5 Products', description: 'Share 5 products today', type: 'daily', target_value: 5, reward_amount: 50, is_active: true, start_date: '', end_date: null, created_at: '' } },
-  { id: '2', user_id: '', challenge_id: '2', current_value: 1, is_completed: false, reward_claimed: false, created_at: '', challenge: { id: '2', title: 'Get 2 Orders', description: 'Get 2 orders today', type: 'daily', target_value: 2, reward_amount: 100, is_active: true, start_date: '', end_date: null, created_at: '' } },
-  { id: '3', user_id: '', challenge_id: '3', current_value: 7, is_completed: true, reward_claimed: false, created_at: '', challenge: { id: '3', title: 'Refer 5 Users', description: 'Refer 5 users this week', type: 'weekly', target_value: 5, reward_amount: 500, is_active: true, start_date: '', end_date: null, created_at: '' } },
-];
-
 function getStatConfigForRole(role: Role, wallet: Wallet | null, counts: Record<string, number | string>) {
   const w = wallet || { balance: 0, pending_balance: 0, total_earned: 0 };
   const configs: Record<Role, DashboardStats['stats']> = {
     AFFILIATE: [
-      { title: 'Total Earned', value: formatINR(w.total_earned), icon: <DollarSign className="w-5 h-5" />, trend: 12, color: 'accent' },
-      { title: 'This Month', value: formatINR(Number(counts.monthEarnings) || 0), icon: <TrendingUp className="w-5 h-5" />, trend: 8, color: 'success' },
+      { title: 'Total Earned', value: formatINR(w.total_earned), icon: <DollarSign className="w-5 h-5" />, color: 'accent' },
+      { title: 'This Month', value: formatINR(Number(counts.monthEarnings) || 0), icon: <TrendingUp className="w-5 h-5" />, color: 'success' },
       { title: 'Pending', value: formatINR(w.pending_balance), icon: <Clock className="w-5 h-5" />, color: 'navy' },
-      { title: 'Total Referrals', value: String(counts.referrals || 0), icon: <Users className="w-5 h-5" />, trend: 15, color: 'blue' },
+      { title: 'Total Referrals', value: String(counts.referrals || 0), icon: <Users className="w-5 h-5" />, color: 'blue' },
     ],
     RESELLER: [
-      { title: 'Total Revenue', value: formatINR(Number(counts.revenue) || 0), icon: <DollarSign className="w-5 h-5" />, trend: 18, color: 'accent' },
-      { title: 'My Commission', value: formatINR(w.total_earned), icon: <TrendingUp className="w-5 h-5" />, trend: 10, color: 'success' },
+      { title: 'Total Revenue', value: formatINR(Number(counts.revenue) || 0), icon: <DollarSign className="w-5 h-5" />, color: 'accent' },
+      { title: 'My Commission', value: formatINR(w.total_earned), icon: <TrendingUp className="w-5 h-5" />, color: 'success' },
       { title: 'Orders', value: String(counts.orders || 0), icon: <ShoppingCart className="w-5 h-5" />, color: 'blue' },
       { title: 'Products Listed', value: String(counts.products || 0), icon: <Package className="w-5 h-5" />, color: 'navy' },
     ],
     VENDOR: [
-      { title: 'Total Sales', value: formatINR(Number(counts.revenue) || 0), icon: <DollarSign className="w-5 h-5" />, trend: 22, color: 'accent' },
+      { title: 'Total Sales', value: formatINR(Number(counts.revenue) || 0), icon: <DollarSign className="w-5 h-5" />, color: 'accent' },
       { title: 'Products', value: String(counts.products || 0), icon: <Package className="w-5 h-5" />, color: 'success' },
       { title: 'Pending Orders', value: String(counts.pendingOrders || 0), icon: <ClipboardList className="w-5 h-5" />, color: 'blue' },
       { title: 'Stock Alerts', value: String(counts.stockAlerts || 0), icon: <AlertTriangle className="w-5 h-5" />, color: 'navy' },
     ],
     SAAS_OWNER: [
-      { title: 'Store Revenue', value: formatINR(Number(counts.revenue) || 0), icon: <Store className="w-5 h-5" />, trend: 25, color: 'accent' },
-      { title: 'Active Users', value: String(counts.activeUsers || 0), icon: <UserCheck className="w-5 h-5" />, trend: 5, color: 'success' },
+      { title: 'Store Revenue', value: formatINR(Number(counts.revenue) || 0), icon: <Store className="w-5 h-5" />, color: 'accent' },
+      { title: 'Active Users', value: String(counts.activeUsers || 0), icon: <UserCheck className="w-5 h-5" />, color: 'success' },
       { title: 'Commission Paid', value: formatINR(Number(counts.commissionPaid) || 0), icon: <DollarSign className="w-5 h-5" />, color: 'blue' },
       { title: 'Subscription', value: String(counts.subscriptionPlan || 'Starter'), icon: <Layers className="w-5 h-5" />, color: 'navy' },
     ],
     ADMIN: [
-      { title: 'Total Users', value: String(counts.totalUsers || 0), icon: <Users className="w-5 h-5" />, trend: 30, color: 'accent' },
-      { title: 'GMV', value: formatINR(Number(counts.gmv) || 0), icon: <DollarSign className="w-5 h-5" />, trend: 20, color: 'success' },
-      { title: 'Platform Revenue', value: formatINR(Number(counts.platformRevenue) || 0), icon: <TrendingUp className="w-5 h-5" />, trend: 15, color: 'blue' },
+      { title: 'Total Users', value: String(counts.totalUsers || 0), icon: <Users className="w-5 h-5" />, color: 'accent' },
+      { title: 'GMV', value: formatINR(Number(counts.gmv) || 0), icon: <DollarSign className="w-5 h-5" />, color: 'success' },
+      { title: 'Platform Revenue', value: formatINR(Number(counts.platformRevenue) || 0), icon: <TrendingUp className="w-5 h-5" />, color: 'blue' },
       { title: 'Active Tenants', value: String(counts.activeTenants || 0), icon: <Store className="w-5 h-5" />, color: 'navy' },
     ],
   };
@@ -126,7 +120,7 @@ export function DashboardHome() {
       setActivity(recentOrders || []);
 
       const { data: cp } = await supabase.from('challenge_progress').select('*, challenge:challenges(*)').eq('user_id', user.id).eq('challenge.is_active', true).limit(3);
-      setChallenges(cp && cp.length > 0 ? cp : DEMO_CHALLENGES);
+      setChallenges(cp || []);
 
       setLoading(false);
     };
@@ -225,7 +219,10 @@ export function DashboardHome() {
             </h2>
           </div>
           <div className="p-6 space-y-5">
-            {challenges.map((cp) => {
+            {challenges.length === 0 ? (
+              <p className="text-sm text-navy-500 text-center py-4">No active challenges right now.</p>
+            ) : (
+            challenges.map((cp) => {
               const progress = cp.challenge ? Math.min((cp.current_value / cp.challenge.target_value) * 100, 100) : 0;
               return (
                 <div key={cp.id}>
@@ -251,7 +248,8 @@ export function DashboardHome() {
                   </p>
                 </div>
               );
-            })}
+            })
+            )}
           </div>
         </div>
       </div>

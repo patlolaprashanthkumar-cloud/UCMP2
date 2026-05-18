@@ -28,9 +28,10 @@ export function LoginPage() {
     e.preventDefault();
     if (!email || !password) { toast('Please fill all fields', 'error'); return; }
     setLoading(true);
-    const { error } = await signIn(email, password);
+    const { error, profileMissing } = await signIn(email, password);
     setLoading(false);
     if (error) { toast(error, 'error'); return; }
+    if (profileMissing) return;
     toast('Welcome back!');
     navigate('/dashboard');
   };
@@ -65,16 +66,6 @@ export function LoginPage() {
           <p className="text-navy-300 text-lg leading-relaxed">
             Start earning through affiliate marketing, reselling, or launch your own white-label commerce platform.
           </p>
-          <div className="mt-8 grid grid-cols-2 gap-4">
-            <div className="bg-white/5 rounded-xl px-4 py-3 border border-white/10">
-              <p className="text-2xl font-bold text-accent-400">50K+</p>
-              <p className="text-sm text-navy-300">Active Users</p>
-            </div>
-            <div className="bg-white/5 rounded-xl px-4 py-3 border border-white/10">
-              <p className="text-2xl font-bold text-accent-400">12Cr+</p>
-              <p className="text-sm text-navy-300">Payouts Done</p>
-            </div>
-          </div>
         </div>
       </div>
 

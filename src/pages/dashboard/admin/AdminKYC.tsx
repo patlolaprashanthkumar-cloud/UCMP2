@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Shield, CheckCircle, XCircle } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
-import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
 import { getStatusColor } from '../../../lib/format';
 import { Modal } from '../../../components/ui/Modal';
@@ -13,7 +12,6 @@ import type { KYC } from '../../../types';
 const PAGE_SIZE = 10;
 
 export function AdminKYC() {
-  const { user } = useAuth();
   const { toast } = useToast();
   const [records, setRecords] = useState<(KYC & { profiles: { name: string } })[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,12 +50,12 @@ export function AdminKYC() {
     const newStatus = modal.action === 'approve' ? 'verified' : 'rejected';
     const { error: kycError } = await supabase
       .from('kyc')
-      .update({ status: newStatus, reviewed_by: user?.id, reviewed_at: new Date().toISOString() })
+      .update({ status: newStatus })
       .eq('id', modal.record.id);
-    if (!kycError && modal.action === 'approve') {
+    if (!kycError) {
       await supabase
         .from('profiles')
-        .update({ kyc_status: 'verified' })
+        .update({ kyc_status: newStatus === 'verified' ? 'verified' : 'rejected' })
         .eq('id', modal.record.user_id);
     }
     if (kycError) toast('Action failed', 'error');
