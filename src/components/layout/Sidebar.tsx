@@ -4,8 +4,8 @@ import { useAuth } from '../../context/AuthContext';
 import type { Role } from '../../types';
 import {
   LayoutDashboard, Package, ShoppingCart, Wallet, Users, Settings,
-  Trophy, Shield, BarChart3, Store, Link2, Share2, LogOut,
-  Menu, X, ChevronRight, Zap, FileCheck, Crown,
+  Trophy, Shield, BarChart3, Store, LogOut,
+  Menu, X, ChevronRight, Zap, FileCheck, Crown, User, DollarSign,
 } from 'lucide-react';
 import { getRoleLabel } from '../../lib/format';
 
@@ -17,24 +17,23 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { label: 'Dashboard', path: '/dashboard', icon: <LayoutDashboard className="w-5 h-5" />, roles: ['AFFILIATE', 'RESELLER', 'VENDOR', 'SAAS_OWNER', 'ADMIN'] },
-  { label: 'Products', path: '/dashboard/products', icon: <Package className="w-5 h-5" />, roles: ['AFFILIATE', 'RESELLER', 'VENDOR', 'ADMIN'] },
-  { label: 'My Links', path: '/dashboard/links', icon: <Link2 className="w-5 h-5" />, roles: ['AFFILIATE'] },
-  { label: 'Resell Products', path: '/dashboard/resell', icon: <Share2 className="w-5 h-5" />, roles: ['RESELLER'] },
+  { label: 'Dashboard', path: '/dashboard', icon: <LayoutDashboard className="w-5 h-5" />, roles: ['VENDOR', 'SAAS_OWNER', 'ADMIN'] },
+  { label: 'Profile', path: '/dashboard/profile', icon: <User className="w-5 h-5" />, roles: ['VENDOR', 'SAAS_OWNER'] },
+  { label: 'Products', path: '/dashboard/products', icon: <Package className="w-5 h-5" />, roles: ['VENDOR', 'ADMIN'] },
   { label: 'My Products', path: '/dashboard/my-products', icon: <Package className="w-5 h-5" />, roles: ['VENDOR'] },
   { label: 'Orders', path: '/dashboard/orders', icon: <ShoppingCart className="w-5 h-5" />, roles: ['VENDOR', 'ADMIN'] },
-  { label: 'My Orders', path: '/dashboard/my-orders', icon: <ShoppingCart className="w-5 h-5" />, roles: ['AFFILIATE', 'RESELLER'] },
-  { label: 'Wallet', path: '/dashboard/wallet', icon: <Wallet className="w-5 h-5" />, roles: ['AFFILIATE', 'RESELLER', 'VENDOR', 'SAAS_OWNER'] },
-  { label: 'Referrals', path: '/dashboard/referrals', icon: <Users className="w-5 h-5" />, roles: ['AFFILIATE', 'RESELLER', 'VENDOR', 'SAAS_OWNER'] },
-  { label: 'KYC', path: '/dashboard/kyc', icon: <FileCheck className="w-5 h-5" />, roles: ['AFFILIATE', 'RESELLER', 'VENDOR', 'SAAS_OWNER'] },
-  { label: 'Challenges', path: '/dashboard/challenges', icon: <Zap className="w-5 h-5" />, roles: ['AFFILIATE', 'RESELLER', 'VENDOR'] },
+  { label: 'Wallet', path: '/dashboard/wallet', icon: <Wallet className="w-5 h-5" />, roles: ['VENDOR', 'SAAS_OWNER'] },
+  { label: 'Referrals', path: '/dashboard/referrals', icon: <Users className="w-5 h-5" />, roles: ['VENDOR', 'SAAS_OWNER'] },
+  { label: 'KYC', path: '/dashboard/kyc', icon: <FileCheck className="w-5 h-5" />, roles: ['VENDOR', 'SAAS_OWNER'] },
+  { label: 'Challenges', path: '/dashboard/challenges', icon: <Zap className="w-5 h-5" />, roles: ['VENDOR'] },
   { label: 'My Store', path: '/dashboard/saas', icon: <Store className="w-5 h-5" />, roles: ['SAAS_OWNER'] },
-  { label: 'Leaderboard', path: '/leaderboard', icon: <Trophy className="w-5 h-5" />, roles: ['AFFILIATE', 'RESELLER', 'VENDOR', 'SAAS_OWNER', 'ADMIN'] },
+  { label: 'Leaderboard', path: '/leaderboard', icon: <Trophy className="w-5 h-5" />, roles: ['VENDOR', 'SAAS_OWNER', 'ADMIN'] },
   { label: 'Users', path: '/dashboard/admin/users', icon: <Users className="w-5 h-5" />, roles: ['ADMIN'] },
   { label: 'Commissions', path: '/dashboard/admin/commissions', icon: <Settings className="w-5 h-5" />, roles: ['ADMIN'] },
   { label: 'KYC Review', path: '/dashboard/admin/kyc', icon: <Shield className="w-5 h-5" />, roles: ['ADMIN'] },
   { label: 'Withdrawals', path: '/dashboard/admin/withdrawals', icon: <Wallet className="w-5 h-5" />, roles: ['ADMIN'] },
   { label: 'Tenants', path: '/dashboard/admin/tenants', icon: <Store className="w-5 h-5" />, roles: ['ADMIN'] },
+  { label: 'Billing', path: '/dashboard/admin/billing', icon: <DollarSign className="w-5 h-5" />, roles: ['ADMIN'] },
   { label: 'Analytics', path: '/dashboard/admin/analytics', icon: <BarChart3 className="w-5 h-5" />, roles: ['ADMIN'] },
 ];
 

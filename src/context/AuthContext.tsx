@@ -6,14 +6,22 @@ import { useToast } from './ToastContext';
 const missingConfigError =
   'Supabase is not configured. Create a .env file with VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (see .env.example).';
 
+export type StoreSignupRole = 'CUSTOMER' | 'AFFILIATE' | 'RESELLER';
+
 interface AuthState {
   user: Profile | null;
   loading: boolean;
-  signUp: (email: string, password: string, name: string, role: Role, referralCode?: string) => Promise<{ error?: string; needsEmailVerification?: boolean }>;
-  signIn: (email: string, password: string) => Promise<{ error?: string; profileMissing?: boolean }>;
+  signUp: (
+    email: string,
+    password: string,
+    name: string,
+    role: Role,
+    referralCode?: string,
+    storeContext?: { tenantId: string; storeRole: StoreSignupRole },
+  ) => Promise<{ error?: string; needsEmailVerification?: boolean }>;
+  signIn: (email: string, password: string) => Promise<{ error?: string; profileMissing?: boolean; profile?: Profile }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
-  demoLogin: (role: Role) => Promise<{ error?: string }>;
 }
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
@@ -70,17 +78,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, [fetchProfile]);
 
-  const signUp = async (email: string, password: string, name: string, role: Role, referralCode?: string) => {
+  const signUp = async (
+    email: string,
+    password: string,
+    name: string,
+    role: Role,
+    referralCode?: string,
+    storeContext?: { tenantId: string; storeRole: StoreSignupRole },
+  ) => {
     if (!isSupabaseConfigured) return { error: missingConfigError };
     const normalizedEmail = email.trim().toLowerCase();
+    const metaRole: Role = storeContext
+      ? storeContext.storeRole === 'AFFILIATE' || storeContext.storeRole === 'RESELLER'
+        ? storeContext.storeRole
+        : 'CUSTOMER'
+      : role;
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email: normalizedEmail,
       password,
       options: {
         data: {
           name,
-          role,
+          role: metaRole,
           referred_by: referralCode ?? null,
+          ...(storeContext
+            ? { tenant_id: storeContext.tenantId, store_role: storeContext.storeRole }
+            : {}),
         },
       },
     });
@@ -110,6 +133,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { profileMissing: true };
       }
       setUser(profile);
+      return { profile };
     }
     return {};
   };
@@ -119,28 +143,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
-  const demoLogin = async (role: Role) => {
-    if (!isSupabaseConfigured) return { error: missingConfigError };
-    const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/demo-login`;
-    const res = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-      },
-      body: JSON.stringify({ role }),
-    });
-    const result = await res.json();
-    if (!res.ok || result.error) return { error: result.error || 'Demo setup failed' };
-
-    const { error, profileMissing } = await signIn(result.email, result.password);
-    if (error) return { error };
-    if (profileMissing) return { error: 'Account has no profile. Contact support.' };
-    return {};
-  };
-
   return (
-    <AuthContext.Provider value={{ user, loading, signUp, signIn, signOut, refreshProfile, demoLogin }}>
+    <AuthContext.Provider value={{ user, loading, signUp, signIn, signOut, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );

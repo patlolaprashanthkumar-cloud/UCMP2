@@ -3,7 +3,7 @@ import { Search, Eye, ToggleLeft, ToggleRight, Users } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useToast } from '../../../context/ToastContext';
 import { formatDate, getRoleBadgeColor, getRoleLabel } from '../../../lib/format';
-import { Profile } from '../../../types';
+import type { Profile, KYC } from '../../../types';
 import { Modal } from '../../../components/ui/Modal';
 import { Pagination } from '../../../components/ui/Pagination';
 import { EmptyState } from '../../../components/ui/EmptyState';
@@ -22,6 +22,9 @@ export function AdminUsers() {
   const [total, setTotal] = useState(0);
   const [selectedUser, setSelectedUser] = useState<Profile | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [detailKyc, setDetailKyc] = useState<KYC | null>(null);
+  const [detailTenants, setDetailTenants] = useState<{ store_name: string; slug: string; role: string }[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
@@ -61,9 +64,28 @@ export function AdminUsers() {
     }
   };
 
-  const viewProfile = (user: Profile) => {
+  const viewProfile = async (user: Profile) => {
     setSelectedUser(user);
     setModalOpen(true);
+    setDetailLoading(true);
+    setDetailKyc(null);
+    setDetailTenants([]);
+    const [{ data: kycRow }, { data: mems }] = await Promise.all([
+      supabase.from('kyc').select('*').eq('user_id', user.id).maybeSingle(),
+      supabase.from('tenant_members').select('role, tenant:saas_tenants(store_name, slug)').eq('user_id', user.id),
+    ]);
+    setDetailKyc(kycRow as KYC | null);
+    const rows = (mems || []) as unknown as { role: string; tenant: { store_name: string; slug: string } | null }[];
+    setDetailTenants(
+      rows
+        .filter((m) => m.tenant)
+        .map((m) => ({
+          store_name: m.tenant!.store_name,
+          slug: m.tenant!.slug,
+          role: m.role,
+        })),
+    );
+    setDetailLoading(false);
   };
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
@@ -88,10 +110,12 @@ export function AdminUsers() {
           className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
         >
           <option value="all">All Roles</option>
-          <option value="admin">Admin</option>
-          <option value="tenant">Tenant</option>
-          <option value="fieldforce">Field Force</option>
-          <option value="customer">Customer</option>
+          <option value="AFFILIATE">Affiliate</option>
+          <option value="RESELLER">Reseller</option>
+          <option value="VENDOR">Vendor</option>
+          <option value="SAAS_OWNER">SaaS Owner</option>
+          <option value="ADMIN">Admin</option>
+          <option value="CUSTOMER">Customer</option>
         </select>
         <select
           value={statusFilter}
@@ -159,17 +183,47 @@ export function AdminUsers() {
       {totalPages > 1 && (
         <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
       )}
-      <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title="User Profile">
+      <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title="User details" size="lg">
         {selectedUser && (
           <div className="space-y-4 text-sm">
             <div className="grid grid-cols-2 gap-4">
               <div><span className="text-slate-500">Name</span><p className="font-medium text-slate-900">{selectedUser.name || '-'}</p></div>
               <div><span className="text-slate-500">Email</span><p className="font-medium text-slate-900">{selectedUser.email}</p></div>
               <div><span className="text-slate-500">Role</span><p className="font-medium text-slate-900">{getRoleLabel(selectedUser.role)}</p></div>
-              <div><span className="text-slate-500">KYC Status</span><p className="font-medium text-slate-900">{selectedUser.kyc_status || 'N/A'}</p></div>
+              <div><span className="text-slate-500">KYC (profile)</span><p className="font-medium text-slate-900">{selectedUser.kyc_status || 'N/A'}</p></div>
+              <div><span className="text-slate-500">Referral</span><p className="font-medium text-slate-900">{selectedUser.referral_code}</p></div>
+              <div><span className="text-slate-500">Referred by</span><p className="font-medium text-slate-900">{selectedUser.referred_by || '—'}</p></div>
               <div><span className="text-slate-500">Status</span><p className="font-medium text-slate-900">{selectedUser.is_active ? 'Active' : 'Inactive'}</p></div>
               <div><span className="text-slate-500">Joined</span><p className="font-medium text-slate-900">{formatDate(selectedUser.created_at)}</p></div>
             </div>
+            {detailLoading ? <p className="text-slate-500 text-sm">Loading KYC & stores…</p> : null}
+            {!detailLoading && detailKyc && (
+              <div className="border border-slate-200 rounded-lg p-4 bg-slate-50">
+                <h3 className="font-semibold text-slate-900 mb-2">KYC record</h3>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div><span className="text-slate-500">Status</span><p className="font-medium">{detailKyc.status}</p></div>
+                  <div><span className="text-slate-500">PAN</span><p className="font-medium">{detailKyc.pan_number || '—'}</p></div>
+                  <div><span className="text-slate-500">Aadhaar</span><p className="font-medium">{detailKyc.aadhar_no ? '••••' + detailKyc.aadhar_no.slice(-4) : '—'}</p></div>
+                  <div><span className="text-slate-500">Bank / IFSC</span><p className="font-medium">{detailKyc.bank_acc_no ? '••••' + detailKyc.bank_acc_no.slice(-4) : '—'} / {detailKyc.ifsc || '—'}</p></div>
+                </div>
+              </div>
+            )}
+            {!detailLoading && !detailKyc && (
+              <p className="text-slate-500 text-sm">No KYC submission on file.</p>
+            )}
+            {detailTenants.length > 0 && (
+              <div>
+                <h3 className="font-semibold text-slate-900 mb-2">Store memberships</h3>
+                <ul className="space-y-1 text-sm">
+                  {detailTenants.map((t) => (
+                    <li key={`${t.slug}-${t.role}`} className="text-slate-700">
+                      <span className="font-medium">{t.store_name}</span>
+                      <span className="text-slate-500"> ({t.slug}) — {t.role}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
       </Modal>

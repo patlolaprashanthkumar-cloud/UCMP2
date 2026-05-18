@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Wallet as WalletIcon, ArrowDownCircle, ArrowUpCircle, TrendingUp, Filter, Clock } from 'lucide-react';
+import { Wallet as WalletIcon, ArrowDownCircle, ArrowUpCircle, TrendingUp, Filter, Clock, Landmark } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { supabase } from '../../lib/supabase';
@@ -9,7 +9,7 @@ import { Pagination } from '../../components/ui/Pagination';
 import { StatCard } from '../../components/ui/StatCard';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { TableSkeleton, CardSkeleton } from '../../components/ui/LoadingSkeleton';
-import type { Wallet, Transaction } from '../../types';
+import type { Wallet, Transaction, VendorPlatformDue, SaasVendorCatalogDue } from '../../types';
 
 const TYPE_COLORS: Record<string, string> = {
   commission: 'bg-green-100 text-green-700',
@@ -33,6 +33,8 @@ export function WalletPage() {
   const [showModal, setShowModal] = useState(false);
   const [amount, setAmount] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [vendorDues, setVendorDues] = useState<VendorPlatformDue[]>([]);
+  const [catalogDuesOwed, setCatalogDuesOwed] = useState<SaasVendorCatalogDue[]>([]);
 
   const fetchWallet = useCallback(async () => {
     const { data } = await supabase
@@ -62,10 +64,31 @@ export function WalletPage() {
     const load = async () => {
       setLoading(true);
       await Promise.all([fetchWallet(), fetchTransactions()]);
+      if (user?.role === 'VENDOR') {
+        const [{ data: vd }, { data: cd }] = await Promise.all([
+          supabase
+            .from('vendor_platform_dues')
+            .select('*')
+            .eq('vendor_id', user.id)
+            .order('created_at', { ascending: false })
+            .limit(50),
+          supabase
+            .from('saas_vendor_catalog_dues')
+            .select('*, tenant:saas_tenants(store_name, slug)')
+            .eq('vendor_id', user.id)
+            .order('created_at', { ascending: false })
+            .limit(50),
+        ]);
+        setVendorDues((vd as VendorPlatformDue[]) || []);
+        setCatalogDuesOwed((cd as unknown as SaasVendorCatalogDue[]) || []);
+      } else {
+        setVendorDues([]);
+        setCatalogDuesOwed([]);
+      }
       setLoading(false);
     };
     load();
-  }, [fetchWallet, fetchTransactions]);
+  }, [fetchWallet, fetchTransactions, user?.id, user?.role]);
 
   const handleWithdraw = async () => {
     const val = parseFloat(amount);
@@ -129,6 +152,53 @@ export function WalletPage() {
         <StatCard title="Pending Balance" value={formatINR(wallet?.pending_balance ?? 0)} icon={<Clock className="w-5 h-5" />} color="navy" />
         <StatCard title="Total Earned" value={formatINR(wallet?.total_earned ?? 0)} icon={<TrendingUp className="w-5 h-5" />} color="success" />
       </div>
+
+      {user?.role === 'VENDOR' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <h2 className="text-sm font-semibold text-navy-900 flex items-center gap-2 mb-3">
+              <Landmark className="w-4 h-4 text-accent-500" /> Platform dues (pay admin)
+            </h2>
+            {vendorDues.length === 0 ? (
+              <p className="text-sm text-gray-500">No platform billing records.</p>
+            ) : (
+              <ul className="space-y-2 text-sm">
+                {vendorDues.map((d) => (
+                  <li key={d.id} className="flex justify-between gap-2 border-b border-gray-100 pb-2">
+                    <span>
+                      {formatINR(d.amount)} — {d.title}
+                      <span className="block text-xs text-gray-500">{formatDate(d.created_at)} · <span className="capitalize">{d.status}</span></span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <h2 className="text-sm font-semibold text-navy-900 flex items-center gap-2 mb-3">
+              <Landmark className="w-4 h-4 text-green-600" /> Catalog royalties (SaaS stores)
+            </h2>
+            {catalogDuesOwed.length === 0 ? (
+              <p className="text-sm text-gray-500">No SaaS catalog payment records.</p>
+            ) : (
+              <ul className="space-y-2 text-sm">
+                {catalogDuesOwed.map((d) => (
+                  <li key={d.id} className="flex justify-between gap-2 border-b border-gray-100 pb-2">
+                    <span>
+                      {formatINR(d.amount)}
+                      <span className="block text-xs text-gray-500">
+                        {(d as { tenant?: { store_name?: string } }).tenant?.store_name} · {formatDate(d.created_at)} ·{' '}
+                        <span className="capitalize">{d.status}</span>
+                      </span>
+                      {d.basis ? <span className="block text-xs text-gray-400">{d.basis}</span> : null}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 border-b border-gray-100">

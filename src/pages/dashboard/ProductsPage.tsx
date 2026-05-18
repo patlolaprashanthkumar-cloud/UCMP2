@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Search, Filter, ShoppingCart, ExternalLink } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../context/AuthContext';
@@ -14,6 +15,8 @@ const PAGE_SIZE = 20;
 
 export function ProductsPage() {
   const { user } = useAuth();
+  const location = useLocation();
+  const isShop = location.pathname.includes('/shop');
   const { toast } = useToast();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,12 +56,22 @@ export function ProductsPage() {
 
   async function handleOrder(product: Product) {
     if (!user) return;
+    const { data: linkRow } = await supabase
+      .from('tenant_products')
+      .select('tenant_id')
+      .eq('product_id', product.id)
+      .limit(1)
+      .maybeSingle();
+    const row: { tenant_id?: string } | null = linkRow;
     const { error } = await supabase.from('orders').insert({
       buyer_id: user.id,
       product_id: product.id,
       quantity: 1,
       total_amount: product.price,
       status: 'confirmed',
+      payment_timing: 'prepaid',
+      payment_status: 'paid',
+      ...(row?.tenant_id ? { tenant_id: row.tenant_id } : {}),
     });
     if (error) {
       toast(error.message, 'error');
@@ -72,7 +85,7 @@ export function ProductsPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <h1 className="page-header">Product Catalog</h1>
+        <h1 className="page-header">{isShop ? 'Shop' : 'Product Catalog'}</h1>
         <p className="text-sm text-navy-500">{total} products available</p>
       </div>
 

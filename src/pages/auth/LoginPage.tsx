@@ -2,25 +2,15 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { Crown, Eye, EyeOff, LogIn, Users, Package, Store, Shield, Share2 } from 'lucide-react';
-import type { Role } from '../../types';
-import { getRoleLabel } from '../../lib/format';
-
-const demoRoles: { role: Role; icon: React.ReactNode; desc: string }[] = [
-  { role: 'AFFILIATE', icon: <Share2 className="w-4 h-4" />, desc: 'Earn commissions' },
-  { role: 'RESELLER', icon: <Users className="w-4 h-4" />, desc: 'Resell products' },
-  { role: 'VENDOR', icon: <Package className="w-4 h-4" />, desc: 'Sell products' },
-  { role: 'SAAS_OWNER', icon: <Store className="w-4 h-4" />, desc: 'Own a store' },
-  { role: 'ADMIN', icon: <Shield className="w-4 h-4" />, desc: 'Manage platform' },
-];
+import { Crown, Eye, EyeOff, LogIn } from 'lucide-react';
+import { getPostLoginPath } from '../../lib/postLoginRedirect';
 
 export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [demoLoading, setDemoLoading] = useState<Role | null>(null);
-  const { signIn, demoLogin } = useAuth();
+  const { signIn } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -28,21 +18,12 @@ export function LoginPage() {
     e.preventDefault();
     if (!email || !password) { toast('Please fill all fields', 'error'); return; }
     setLoading(true);
-    const { error, profileMissing } = await signIn(email, password);
+    const { error, profileMissing, profile } = await signIn(email, password);
     setLoading(false);
     if (error) { toast(error, 'error'); return; }
     if (profileMissing) return;
     toast('Welcome back!');
-    navigate('/dashboard');
-  };
-
-  const handleDemoLogin = async (role: Role) => {
-    setDemoLoading(role);
-    const { error } = await demoLogin(role);
-    setDemoLoading(null);
-    if (error) { toast(error, 'error'); return; }
-    toast(`Logged in as Demo ${getRoleLabel(role)}`);
-    navigate('/dashboard');
+    navigate(profile ? getPostLoginPath(profile) : '/dashboard');
   };
 
   return (
@@ -127,34 +108,6 @@ export function LoginPage() {
               )}
             </button>
           </form>
-
-          <div className="my-6 flex items-center gap-3">
-            <div className="flex-1 h-px bg-navy-700" />
-            <span className="text-xs text-navy-500 font-medium">OR TRY DEMO</span>
-            <div className="flex-1 h-px bg-navy-700" />
-          </div>
-
-          <div className="grid grid-cols-1 gap-2">
-            {demoRoles.map(({ role, icon, desc }) => (
-              <button
-                key={role}
-                onClick={() => handleDemoLogin(role)}
-                disabled={demoLoading !== null}
-                className="flex items-center gap-3 px-4 py-3 bg-navy-800/50 hover:bg-navy-800 border border-navy-700 rounded-xl transition-all group disabled:opacity-50"
-              >
-                <div className="w-8 h-8 rounded-lg bg-accent-500/10 flex items-center justify-center text-accent-400 group-hover:bg-accent-500/20 transition-colors">
-                  {icon}
-                </div>
-                <div className="flex-1 text-left">
-                  <p className="text-sm font-medium text-white">Demo {getRoleLabel(role)}</p>
-                  <p className="text-xs text-navy-500">{desc}</p>
-                </div>
-                {demoLoading === role && (
-                  <div className="w-4 h-4 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin" />
-                )}
-              </button>
-            ))}
-          </div>
 
           <p className="text-center text-sm text-navy-500 mt-6">
             Don't have an account?{' '}

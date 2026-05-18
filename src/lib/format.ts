@@ -69,6 +69,7 @@ export function getRoleBadgeColor(role: string): string {
     VENDOR: 'bg-teal-100 text-teal-700',
     SAAS_OWNER: 'bg-navy-100 text-navy-700',
     ADMIN: 'bg-error-100 text-error-700',
+    CUSTOMER: 'bg-purple-100 text-purple-700',
   };
   return colors[role] || 'bg-gray-100 text-gray-700';
 }
@@ -80,6 +81,7 @@ export function getRoleLabel(role: string): string {
     VENDOR: 'Vendor',
     SAAS_OWNER: 'SaaS Owner',
     ADMIN: 'Admin',
+    CUSTOMER: 'Customer',
   };
   return labels[role] || role;
 }

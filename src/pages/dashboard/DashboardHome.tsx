@@ -12,7 +12,14 @@ import {
 } from 'lucide-react';
 
 interface DashboardStats {
-  stats: { title: string; value: string; icon: React.ReactNode; trend?: number; color?: 'accent' | 'success' | 'blue' | 'navy' }[];
+  stats: {
+    title: string;
+    value: string;
+    icon: React.ReactNode;
+    trend?: number;
+    color?: 'accent' | 'success' | 'blue' | 'navy';
+    to?: string;
+  }[];
   recentActivity: (Order | Transaction)[];
   challenges: ChallengeProgress[];
   wallet: Wallet | null;
@@ -34,16 +41,22 @@ function getStatConfigForRole(role: Role, wallet: Wallet | null, counts: Record<
       { title: 'Products Listed', value: String(counts.products || 0), icon: <Package className="w-5 h-5" />, color: 'navy' },
     ],
     VENDOR: [
-      { title: 'Total Sales', value: formatINR(Number(counts.revenue) || 0), icon: <DollarSign className="w-5 h-5" />, color: 'accent' },
-      { title: 'Products', value: String(counts.products || 0), icon: <Package className="w-5 h-5" />, color: 'success' },
-      { title: 'Pending Orders', value: String(counts.pendingOrders || 0), icon: <ClipboardList className="w-5 h-5" />, color: 'blue' },
-      { title: 'Stock Alerts', value: String(counts.stockAlerts || 0), icon: <AlertTriangle className="w-5 h-5" />, color: 'navy' },
+      { title: 'Total Sales', value: formatINR(Number(counts.revenue) || 0), icon: <DollarSign className="w-5 h-5" />, color: 'accent', to: '/dashboard/orders' },
+      { title: 'Products', value: String(counts.products || 0), icon: <Package className="w-5 h-5" />, color: 'success', to: '/dashboard/my-products' },
+      { title: 'Pending Orders', value: String(counts.pendingOrders || 0), icon: <ClipboardList className="w-5 h-5" />, color: 'blue', to: '/dashboard/orders' },
+      { title: 'Stock Alerts', value: String(counts.stockAlerts || 0), icon: <AlertTriangle className="w-5 h-5" />, color: 'navy', to: '/dashboard/my-products' },
     ],
     SAAS_OWNER: [
-      { title: 'Store Revenue', value: formatINR(Number(counts.revenue) || 0), icon: <Store className="w-5 h-5" />, color: 'accent' },
-      { title: 'Active Users', value: String(counts.activeUsers || 0), icon: <UserCheck className="w-5 h-5" />, color: 'success' },
-      { title: 'Commission Paid', value: formatINR(Number(counts.commissionPaid) || 0), icon: <DollarSign className="w-5 h-5" />, color: 'blue' },
-      { title: 'Subscription', value: String(counts.subscriptionPlan || 'Starter'), icon: <Layers className="w-5 h-5" />, color: 'navy' },
+      { title: 'Store revenue', value: formatINR(Number(counts.revenue) || 0), icon: <Store className="w-5 h-5" />, color: 'accent', to: '/dashboard/saas' },
+      { title: 'Team members', value: String(counts.activeUsers || 0), icon: <UserCheck className="w-5 h-5" />, color: 'success', to: '/dashboard/saas' },
+      { title: 'SKUs listed', value: String(counts.catalogCount || 0), icon: <Package className="w-5 h-5" />, color: 'blue', to: '/dashboard/saas' },
+      { title: 'Subscription', value: String(counts.subscriptionPlan || 'Starter'), icon: <Layers className="w-5 h-5" />, color: 'navy', to: '/dashboard/saas' },
+    ],
+    CUSTOMER: [
+      { title: 'Orders placed', value: String(counts.myOrders || 0), icon: <ShoppingCart className="w-5 h-5" />, color: 'accent' },
+      { title: 'Total spent', value: formatINR(Number(counts.spent) || 0), icon: <DollarSign className="w-5 h-5" />, color: 'success' },
+      { title: 'KYC status', value: String(counts.customerKyc || 'pending'), icon: <UserCheck className="w-5 h-5" />, color: 'blue' },
+      { title: 'Wallet', value: formatINR(w.balance), icon: <Clock className="w-5 h-5" />, color: 'navy' },
     ],
     ADMIN: [
       { title: 'Total Users', value: String(counts.totalUsers || 0), icon: <Users className="w-5 h-5" />, color: 'accent' },
@@ -92,10 +105,19 @@ export function DashboardHome() {
       if (user.role === 'VENDOR') {
         const { count: prodCount } = await supabase.from('products').select('*', { count: 'exact', head: true }).eq('vendor_id', user.id);
         counts.products = prodCount || 0;
-        const { count: pendingCount } = await supabase.from('orders').select('*, products!inner(vendor_id)', { count: 'exact', head: true }).eq('products.vendor_id', user.id).eq('status', 'pending');
+        const { count: pendingCount } = await supabase
+          .from('orders')
+          .select('*, products!inner(vendor_id)', { count: 'exact', head: true })
+          .eq('products.vendor_id', user.id)
+          .eq('status', 'pending');
         counts.pendingOrders = pendingCount || 0;
         const { count: lowStock } = await supabase.from('products').select('*', { count: 'exact', head: true }).eq('vendor_id', user.id).lt('stock', 10);
         counts.stockAlerts = lowStock || 0;
+        const { data: vendorSales } = await supabase
+          .from('orders')
+          .select('total_amount, products!inner(vendor_id)')
+          .eq('products.vendor_id', user.id);
+        counts.revenue = vendorSales?.reduce((s, o) => s + Number(o.total_amount), 0) || 0;
       }
 
       if (user.role === 'ADMIN') {
@@ -105,21 +127,37 @@ export function DashboardHome() {
         counts.activeTenants = tenantCount || 0;
       }
 
+      if (user.role === 'CUSTOMER') {
+        counts.customerKyc = user.kyc_status;
+        const { count: myOrderCount } = await supabase.from('orders').select('*', { count: 'exact', head: true }).eq('buyer_id', user.id);
+        counts.myOrders = myOrderCount || 0;
+        const { data: myOrds } = await supabase.from('orders').select('total_amount').eq('buyer_id', user.id);
+        counts.spent = myOrds?.reduce((s, o) => s + Number(o.total_amount), 0) || 0;
+      }
+
       if (user.role === 'SAAS_OWNER') {
         const { data: tenant } = await supabase.from('saas_tenants').select('*').eq('owner_id', user.id).maybeSingle();
         counts.subscriptionPlan = tenant?.subscription_plan === 'pro' ? 'Pro' : 'Starter';
         if (tenant) {
           const { count: memberCount } = await supabase.from('tenant_members').select('*', { count: 'exact', head: true }).eq('tenant_id', tenant.id);
           counts.activeUsers = memberCount || 0;
+          const { data: tor } = await supabase.from('orders').select('total_amount').eq('tenant_id', tenant.id);
+          counts.revenue = tor?.reduce((s, o) => s + Number(o.total_amount), 0) || 0;
+          const { count: skuCount } = await supabase.from('tenant_products').select('*', { count: 'exact', head: true }).eq('tenant_id', tenant.id);
+          counts.catalogCount = skuCount || 0;
         }
       }
 
       setStats(getStatConfigForRole(user.role, wallet as Wallet | null, counts));
 
-      const { data: recentOrders } = await supabase.from('orders').select('*, product:products(name)').order('created_at', { ascending: false }).limit(5);
+      let recentQ = supabase.from('orders').select('*, product:products(name)').order('created_at', { ascending: false }).limit(5);
+      if (user.role === 'CUSTOMER') {
+        recentQ = recentQ.eq('buyer_id', user.id);
+      }
+      const { data: recentOrders } = await recentQ;
       setActivity(recentOrders || []);
 
-      const { data: cp } = await supabase.from('challenge_progress').select('*, challenge:challenges(*)').eq('user_id', user.id).eq('challenge.is_active', true).limit(3);
+      const { data: cp } = user.role === 'CUSTOMER' ? { data: [] } : await supabase.from('challenge_progress').select('*, challenge:challenges(*)').eq('user_id', user.id).eq('challenge.is_active', true).limit(3);
       setChallenges(cp || []);
 
       setLoading(false);
@@ -148,6 +186,7 @@ export function DashboardHome() {
             {getRoleLabel(user.role)} Dashboard
           </p>
         </div>
+        {user.role !== 'CUSTOMER' && (
         <button
           onClick={copyReferralLink}
           className="inline-flex items-center gap-2 px-4 py-2.5 bg-accent-500 hover:bg-accent-600 text-white rounded-lg font-medium text-sm transition-colors self-start"
@@ -155,6 +194,7 @@ export function DashboardHome() {
           {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
           {copied ? 'Copied!' : 'Copy Referral Link'}
         </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -166,19 +206,22 @@ export function DashboardHome() {
             icon={stat.icon}
             trend={stat.trend}
             color={stat.color}
+            to={stat.to}
           />
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-white rounded-xl border border-navy-100 overflow-hidden">
+      <div className={`grid grid-cols-1 gap-6 ${user.role === 'CUSTOMER' ? '' : 'lg:grid-cols-3'}`}>
+        <div className={user.role === 'CUSTOMER' ? '' : 'lg:col-span-2'}>
           <div className="px-6 py-4 border-b border-navy-100">
             <h2 className="text-lg font-semibold text-navy-900">Recent Activity</h2>
           </div>
           <div className="divide-y divide-navy-50">
             {activity.length === 0 ? (
               <div className="px-6 py-8 text-center text-navy-400">
-                No recent activity yet. Start by sharing products or making sales.
+                {user.role === 'CUSTOMER'
+                  ? 'No orders yet. Browse the shop to make a purchase.'
+                  : 'No recent activity yet. Start by sharing products or making sales.'}
               </div>
             ) : (
               activity.map((item) => (
@@ -211,6 +254,7 @@ export function DashboardHome() {
           </div>
         </div>
 
+        {user.role !== 'CUSTOMER' && (
         <div className="bg-white rounded-xl border border-navy-100 overflow-hidden">
           <div className="px-6 py-4 border-b border-navy-100">
             <h2 className="text-lg font-semibold text-navy-900 flex items-center gap-2">
@@ -252,6 +296,7 @@ export function DashboardHome() {
             )}
           </div>
         </div>
+        )}
       </div>
     </div>
   );

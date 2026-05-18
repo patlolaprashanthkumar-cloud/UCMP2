@@ -11,9 +11,10 @@ const roles: { role: Role; desc: string }[] = [
   { role: 'RESELLER', desc: 'Buy low, sell high with custom margins' },
   { role: 'VENDOR', desc: 'List and sell your own products' },
   { role: 'SAAS_OWNER', desc: 'Launch your own white-label store' },
+  { role: 'CUSTOMER', desc: 'Shop products from curated stores' },
 ];
 
-const URL_SIGNUP_ROLES = new Set<Role>(['AFFILIATE', 'RESELLER', 'VENDOR', 'SAAS_OWNER']);
+const URL_SIGNUP_ROLES = new Set<Role>(['AFFILIATE', 'RESELLER', 'VENDOR', 'SAAS_OWNER', 'CUSTOMER']);
 
 function roleFromSearchParam(raw: string | null): Role {
   if (!raw) return 'AFFILIATE';
@@ -114,7 +115,7 @@ export function SignupPage() {
 
             <div>
               <label className="block text-sm font-medium text-navy-300 mb-2">Select Role</label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {roles.map((r) => (
                   <button
                     key={r.role}

@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, type Dispatch, type SetStateAction, type FormEvent } from 'react';
-import { Plus, Search, Pencil, Trash2, Power, Package, AlertTriangle } from 'lucide-react';
+import { Plus, Search, Pencil, Trash2, Power, Package, AlertTriangle, ImagePlus, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { supabase } from '../../lib/supabase';
+import { uploadPublicFile } from '../../lib/storage';
 import { formatINR } from '../../lib/format';
 import { Modal } from '../../components/ui/Modal';
 import { Pagination } from '../../components/ui/Pagination';
@@ -82,6 +83,9 @@ export function VendorProducts() {
   const [form, setForm] = useState(emptyForm);
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [imageList, setImageList] = useState<string[]>([]);
+  const [imagePaste, setImagePaste] = useState('');
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   const totalPages = Math.ceil(total / PER_PAGE);
 
@@ -116,12 +120,50 @@ export function VendorProducts() {
     return Object.keys(e).length === 0;
   };
 
-  const openAdd = () => { setEditingId(null); setForm(emptyForm); setErrors({}); setModalOpen(true); };
+  const openAdd = () => {
+    setEditingId(null);
+    setForm(emptyForm);
+    setErrors({});
+    setImageList([]);
+    setImagePaste('');
+    setModalOpen(true);
+  };
   const openEdit = (p: Product) => {
     setEditingId(p.id);
     setForm({ name: p.name, description: p.description || '', price: String(p.price), mrp: String(p.mrp), stock: String(p.stock), category: p.category });
+    setImageList(Array.isArray(p.images) ? [...p.images] : []);
+    setImagePaste('');
     setErrors({});
     setModalOpen(true);
+  };
+
+  const addPastedImageUrl = () => {
+    const u = imagePaste.trim();
+    if (!u) return;
+    try {
+      // eslint-disable-next-line no-new -- validate URL
+      new URL(u);
+      setImageList((prev) => [...prev, u]);
+      setImagePaste('');
+    } catch {
+      toast('Enter a valid image URL', 'error');
+    }
+  };
+
+  const onPickImageFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+    setUploadingImage(true);
+    const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+    const path = `${user.id}/${crypto.randomUUID()}-${safeName}`;
+    const { url, error } = await uploadPublicFile('product-media', path, file);
+    setUploadingImage(false);
+    e.target.value = '';
+    if (error) {
+      toast(error, 'error');
+      return;
+    }
+    if (url) setImageList((prev) => [...prev, url]);
   };
 
   const handleSubmit = async (e: FormEvent) => {
@@ -136,6 +178,7 @@ export function VendorProducts() {
       stock: Number(form.stock),
       category: form.category,
       vendor_id: user.id,
+      images: imageList,
     };
     const { error } = editingId
       ? await supabase.from('products').update(payload).eq('id', editingId)
@@ -190,6 +233,7 @@ export function VendorProducts() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-navy-50 text-left text-navy-600">
+                  <th className="px-4 py-3 font-medium w-14">Img</th>
                   <th className="px-4 py-3 font-medium">Name</th>
                   <th className="px-4 py-3 font-medium">Price</th>
                   <th className="px-4 py-3 font-medium">MRP</th>
@@ -201,6 +245,15 @@ export function VendorProducts() {
               <tbody className="divide-y divide-navy-100">
                 {products.map((p) => (
                   <tr key={p.id} className="hover:bg-navy-50/50 transition-colors">
+                    <td className="px-4 py-3">
+                      {p.images?.[0] ? (
+                        <img src={p.images[0]} alt="" className="w-10 h-10 rounded-lg object-cover border border-navy-100" />
+                      ) : (
+                        <div className="w-10 h-10 rounded-lg bg-navy-100 flex items-center justify-center text-navy-400">
+                          <Package className="w-4 h-4" />
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-3 font-medium text-navy-900 max-w-[200px] truncate">{p.name}</td>
                     <td className="px-4 py-3 text-navy-700">{formatINR(p.price)}</td>
                     <td className="px-4 py-3 text-navy-700">{formatINR(p.mrp)}</td>
@@ -253,6 +306,43 @@ export function VendorProducts() {
             <VendorProductField label="Stock" name="stock" type="number" form={form} setForm={setForm} errors={errors} />
           </div>
           <VendorProductField label="Category" name="category" el="select" form={form} setForm={setForm} errors={errors} />
+          <div>
+            <label className="block text-sm font-medium text-navy-700 mb-1">Product images</label>
+            <p className="text-xs text-navy-500 mb-2">Upload files or paste image URLs.</p>
+            <div className="flex flex-wrap gap-2 mb-2">
+              {imageList.map((src, i) => (
+                <div key={`${src}-${i}`} className="relative group">
+                  <img src={src} alt="" className="w-16 h-16 rounded-lg object-cover border border-navy-200" />
+                  <button
+                    type="button"
+                    onClick={() => setImageList((prev) => prev.filter((_, j) => j !== i))}
+                    className="absolute -top-1 -right-1 p-0.5 bg-navy-800 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <label className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-navy-200 text-sm font-medium text-navy-700 hover:bg-navy-50 cursor-pointer shrink-0">
+                <ImagePlus className="w-4 h-4" />
+                {uploadingImage ? 'Uploading…' : 'Upload file'}
+                <input type="file" accept="image/*" className="hidden" onChange={onPickImageFile} disabled={uploadingImage} />
+              </label>
+              <div className="flex gap-2 flex-1 min-w-0">
+                <input
+                  type="url"
+                  value={imagePaste}
+                  onChange={(e) => setImagePaste(e.target.value)}
+                  placeholder="https://…/image.jpg"
+                  className="flex-1 min-w-0 rounded-lg border border-navy-200 px-3 py-2 text-sm text-navy-900 focus:ring-2 focus:ring-accent-500 outline-none"
+                />
+                <button type="button" onClick={addPastedImageUrl} className="px-3 py-2 rounded-lg bg-navy-100 text-navy-800 text-sm font-medium hover:bg-navy-200 shrink-0">
+                  Add URL
+                </button>
+              </div>
+            </div>
+          </div>
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={() => setModalOpen(false)} className="px-4 py-2.5 rounded-lg border border-navy-200 text-sm font-medium text-navy-700 hover:bg-navy-50 transition-colors">
               Cancel
