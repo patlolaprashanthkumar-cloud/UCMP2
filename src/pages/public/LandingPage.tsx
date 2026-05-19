@@ -20,8 +20,8 @@ export function LandingPage() {
   return (
     <div className="min-h-screen bg-white">
       {/* Navbar */}
-      <nav className="fixed top-0 inset-x-0 z-50 bg-white/80 backdrop-blur-xl border-b border-navy-100">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <nav className="fixed top-0 inset-x-0 z-[100] bg-white/80 backdrop-blur-xl border-b border-navy-100">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between relative z-10">
           <Link to="/" className="flex items-center gap-2">
             <div className="w-8 h-8 bg-accent-500 rounded-lg flex items-center justify-center">
               <Crown className="w-5 h-5 text-white" />
@@ -33,7 +33,7 @@ export function LandingPage() {
             <Link to="/leaderboard" className="text-sm font-medium text-navy-600 hover:text-navy-900 transition-colors">Leaderboard</Link>
             <Link to="/affiliate-landing" className="text-sm font-medium text-navy-600 hover:text-navy-900 transition-colors">Earn Money</Link>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 relative z-10">
             <Link to="/login" className="text-sm font-medium text-navy-600 hover:text-navy-900 px-4 py-2 transition-colors">
               Sign In
             </Link>
@@ -46,7 +46,7 @@ export function LandingPage() {
 
       {/* Hero */}
       <section className="pt-32 pb-20 px-4 relative overflow-hidden">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[800px] bg-accent-500/5 rounded-full blur-3xl" />
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[800px] bg-accent-500/5 rounded-full blur-3xl pointer-events-none" />
         <div className="max-w-5xl mx-auto text-center relative z-10">
           <div className="inline-flex items-center gap-2 bg-accent-50 text-accent-600 px-4 py-2 rounded-full text-sm font-medium mb-6">
             <Zap className="w-4 h-4" />
@@ -218,16 +218,26 @@ export function LandingPage() {
               <h4 className="text-sm font-semibold text-white mb-3">Resources</h4>
               <div className="space-y-2">
                 <Link to="/leaderboard" className="block text-sm text-navy-400 hover:text-white transition-colors">Leaderboard</Link>
-                <span className="block text-sm text-navy-400">Help Center</span>
-                <span className="block text-sm text-navy-400">API Docs</span>
+                <Link to="/help" className="block text-sm text-navy-400 hover:text-white transition-colors">
+                  Help Center
+                </Link>
+                <Link to="/docs" className="block text-sm text-navy-400 hover:text-white transition-colors">
+                  API Docs
+                </Link>
               </div>
             </div>
             <div>
               <h4 className="text-sm font-semibold text-white mb-3">Legal</h4>
               <div className="space-y-2">
-                <span className="block text-sm text-navy-400">Privacy Policy</span>
-                <span className="block text-sm text-navy-400">Terms of Service</span>
-                <span className="block text-sm text-navy-400">Refund Policy</span>
+                <Link to="/privacy" className="block text-sm text-navy-400 hover:text-white transition-colors">
+                  Privacy Policy
+                </Link>
+                <Link to="/terms" className="block text-sm text-navy-400 hover:text-white transition-colors">
+                  Terms of Service
+                </Link>
+                <Link to="/refunds" className="block text-sm text-navy-400 hover:text-white transition-colors">
+                  Refund Policy
+                </Link>
               </div>
             </div>
           </div>

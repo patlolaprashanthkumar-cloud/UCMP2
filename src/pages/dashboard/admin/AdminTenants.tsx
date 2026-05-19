@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Store, Eye, ToggleLeft, ToggleRight, Users } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { supabase } from '../../../lib/supabase';
 import { useToast } from '../../../context/ToastContext';
 import { formatDate } from '../../../lib/format';
@@ -138,7 +139,13 @@ export function AdminTenants() {
               </div>
               <p className="mt-1 text-2xl font-bold text-navy-900">{memberCount}</p>
             </div>
-            <div className="flex justify-end">
+            <div className="flex flex-wrap justify-end gap-2">
+              <Link
+                to={`/dashboard/admin/orders?tenant=${encodeURIComponent(detailModal.tenant.id)}`}
+                className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-medium text-white hover:bg-accent-600"
+              >
+                View orders
+              </Link>
               <button onClick={() => setDetailModal({ open: false, tenant: null })} className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-navy-900 hover:bg-gray-50">Close</button>
             </div>
           </div>

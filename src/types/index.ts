@@ -32,6 +32,7 @@ export interface Product {
 
 export type OrderPaymentTiming = 'prepaid' | 'postpaid';
 export type OrderPaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded';
+export type OrderKind = 'storefront' | 'catalog_procurement';
 
 export interface Order {
   id: string;
@@ -50,8 +51,12 @@ export interface Order {
   razorpay_order_id: string | null;
   razorpay_payment_id: string | null;
   tenant_id: string | null;
+  /** storefront (default) or B2B catalog procurement from SaaS dashboard */
+  order_kind?: OrderKind;
   created_at: string;
   size?: string | null;
+  affiliate_commission_amount?: number | null;
+  affiliate_commission_note?: string | null;
   product?: Product;
   buyer?: Profile;
 }
@@ -64,6 +69,9 @@ export interface StoreCartItem {
   quantity: number;
   updated_at: string;
   size?: string | null;
+  offered_by_reseller_id?: string | null;
+  /** null = normal customer line; resale_stock = reseller stocking purchase */
+  purchase_intent?: string | null;
   product?: Product;
 }
 
@@ -119,6 +127,10 @@ export interface SaasTenant {
   reseller_requirements?: string;
   default_affiliate_platform_fee_percent?: number;
   default_reseller_platform_fee_percent?: number;
+  /** Public storefront "About us" (plain text). */
+  store_about?: string;
+  /** Public storefront terms & conditions (plain text). */
+  store_terms?: string;
 }
 
 export interface StoreDeliveryAddress {
@@ -157,6 +169,7 @@ export interface TenantStoreResellerProductMargin {
   user_id: string;
   product_id: string;
   margin_amount: number;
+  seller_display_name: string;
   updated_at: string;
 }
 
@@ -220,6 +233,8 @@ export interface TenantProduct {
   tenant_id: string;
   product_id: string;
   created_at: string;
+  listing_quantity?: number;
+  catalog_procurement_order_id?: string | null;
   vendor_royalty_percent?: number;
   product?: Product;
 }
@@ -250,6 +265,19 @@ export interface SaasVendorCatalogDue {
   paid_at: string | null;
   tenant?: SaasTenant;
   vendor?: Profile;
+}
+
+export interface SaasTenantPlatformDue {
+  id: string;
+  tenant_id: string;
+  amount: number;
+  currency: string;
+  status: 'pending' | 'paid' | 'waived';
+  title: string;
+  notes: string;
+  created_at: string;
+  paid_at: string | null;
+  tenant?: SaasTenant;
 }
 
 export interface TenantMember {

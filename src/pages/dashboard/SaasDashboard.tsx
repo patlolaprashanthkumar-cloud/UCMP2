@@ -13,13 +13,16 @@ import type { SaasTenant, TenantMember, Product, TenantProduct, Order, SaasVendo
 import {
   Store, Crown, Activity, ExternalLink, Palette, Save,
   UserPlus, Trash2, ShoppingCart, DollarSign, Users, ArrowUpRight,
-  ImagePlus, Package, Plus, Search, Link2, Share2,
+  ImagePlus, Package, Plus, Search, Link2, Share2, TrendingUp, ShoppingBag,
 } from 'lucide-react';
 
 type TenantOrderRow = Order & {
   buyer?: { name: string; email: string } | null;
   product?: { name: string } | null;
+  affiliate?: { name: string; email: string } | null;
 };
+
+type CatalogModalState = null | { mode: 'add'; product: Product } | { mode: 'increase'; line: TenantProduct };
 
 function slugify(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -37,6 +40,8 @@ export function SaasDashboard() {
     logo: '',
     primary_color: '',
     reseller_requirements: '',
+    store_about: '',
+    store_terms: '',
     default_affiliate_platform_fee_percent: 5,
     default_reseller_platform_fee_percent: 5,
   });
@@ -44,7 +49,13 @@ export function SaasDashboard() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('CUSTOMER');
-  const [stats, setStats] = useState({ orders: 0, revenue: 0, catalogCount: 0 });
+  const [stats, setStats] = useState({
+    orders: 0,
+    revenue: 0,
+    procurementOrders: 0,
+    procurementRevenue: 0,
+    catalogCount: 0,
+  });
   const [vendorCatalog, setVendorCatalog] = useState<Product[]>([]);
   const [storeLines, setStoreLines] = useState<TenantProduct[]>([]);
   const [catalogSearch, setCatalogSearch] = useState('');
@@ -52,7 +63,14 @@ export function SaasDashboard() {
   const [logoPaste, setLogoPaste] = useState('');
   const [createLogoFile, setCreateLogoFile] = useState<File | null>(null);
   const [tenantOrders, setTenantOrders] = useState<TenantOrderRow[]>([]);
+  const [affiliateCommissionEdits, setAffiliateCommissionEdits] = useState<
+    Record<string, { amount: string; note: string }>
+  >({});
+  const [savingAffiliateCommissionFor, setSavingAffiliateCommissionFor] = useState<string | null>(null);
   const [saasCatalogDues, setSaasCatalogDues] = useState<SaasVendorCatalogDue[]>([]);
+  const [catalogModal, setCatalogModal] = useState<CatalogModalState>(null);
+  const [catalogQtyInput, setCatalogQtyInput] = useState(1);
+  const [catalogSubmitting, setCatalogSubmitting] = useState(false);
 
   const location = useLocation();
 
@@ -71,6 +89,8 @@ export function SaasDashboard() {
         logo: t.logo || '',
         primary_color: t.primary_color,
         reseller_requirements: t.reseller_requirements ?? '',
+        store_about: t.store_about ?? '',
+        store_terms: t.store_terms ?? '',
         default_affiliate_platform_fee_percent: Number(t.default_affiliate_platform_fee_percent ?? 5),
         default_reseller_platform_fee_percent: Number(t.default_reseller_platform_fee_percent ?? 5),
       });
@@ -86,33 +106,52 @@ export function SaasDashboard() {
 
       const { data: tps } = await supabase
         .from('tenant_products')
-        .select('id, tenant_id, product_id, created_at, product:products(*)')
+        .select(
+          'id, tenant_id, product_id, created_at, listing_quantity, catalog_procurement_order_id, product:products(*)',
+        )
         .eq('tenant_id', t.id);
       const lines = (tps || []) as unknown as TenantProduct[];
       setStoreLines(lines);
 
-      const { count: orderCount } = await supabase
+      const { data: kindRows } = await supabase
         .from('orders')
-        .select('*', { count: 'exact', head: true })
+        .select('total_amount, order_kind')
         .eq('tenant_id', t.id);
-      const { data: orderRows } = await supabase
-        .from('orders')
-        .select('total_amount')
-        .eq('tenant_id', t.id);
-      const revenue = orderRows?.reduce((s, row) => s + Number(row.total_amount), 0) || 0;
+
+      const rows = kindRows || [];
+      const storefrontRows = rows.filter((r) => r.order_kind !== 'catalog_procurement');
+      const procRows = rows.filter((r) => r.order_kind === 'catalog_procurement');
+
       setStats({
-        orders: orderCount || 0,
-        revenue,
+        orders: storefrontRows.length,
+        revenue: storefrontRows.reduce((s, row) => s + Number(row.total_amount), 0),
+        procurementOrders: procRows.length,
+        procurementRevenue: procRows.reduce((s, row) => s + Number(row.total_amount), 0),
         catalogCount: lines.length,
       });
 
       const { data: ordData } = await supabase
         .from('orders')
-        .select('*, buyer:profiles!buyer_id(name, email), product:products(name)')
+        .select(
+          '*, buyer:profiles!buyer_id(name, email), product:products(name), affiliate:profiles!affiliate_id(name, email)',
+        )
         .eq('tenant_id', t.id)
         .order('created_at', { ascending: false })
         .limit(200);
-      setTenantOrders((ordData as TenantOrderRow[]) || []);
+      const nextOrders = (ordData as TenantOrderRow[]) || [];
+      setTenantOrders(nextOrders);
+      const edits: Record<string, { amount: string; note: string }> = {};
+      for (const o of nextOrders) {
+        if (!o.affiliate_id) continue;
+        edits[o.id] = {
+          amount:
+            o.affiliate_commission_amount != null && o.affiliate_commission_amount !== undefined
+              ? String(o.affiliate_commission_amount)
+              : '',
+          note: o.affiliate_commission_note ?? '',
+        };
+      }
+      setAffiliateCommissionEdits(edits);
 
       const { data: duesRows } = await supabase
         .from('saas_vendor_catalog_dues')
@@ -126,7 +165,9 @@ export function SaasDashboard() {
       setVendorCatalog([]);
       setStoreLines([]);
       setTenantOrders([]);
+      setAffiliateCommissionEdits({});
       setSaasCatalogDues([]);
+      setStats({ orders: 0, revenue: 0, procurementOrders: 0, procurementRevenue: 0, catalogCount: 0 });
     }
     setLoading(false);
   };
@@ -140,9 +181,14 @@ export function SaasDashboard() {
     if (el) requestAnimationFrame(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   }, [location.hash, tenant?.id, loading]);
 
+  const storefrontOrders = useMemo(
+    () => tenantOrders.filter((o) => o.order_kind !== 'catalog_procurement'),
+    [tenantOrders],
+  );
+
   const customerSummaries = useMemo(() => {
     const m = new Map<string, { name: string; email: string; orders: number; spent: number }>();
-    for (const o of tenantOrders) {
+    for (const o of storefrontOrders) {
       const b = o.buyer;
       const prev = m.get(o.buyer_id) ?? {
         name: b?.name || 'Unknown',
@@ -159,21 +205,21 @@ export function SaasDashboard() {
     return Array.from(m.entries())
       .map(([buyerId, v]) => ({ buyerId, ...v }))
       .sort((a, b) => b.spent - a.spent);
-  }, [tenantOrders]);
+  }, [storefrontOrders]);
 
   const affiliateRows = useMemo(
     () =>
       members
         .filter((mem) => mem.role === 'AFFILIATE')
         .map((mem) => {
-          const attributed = tenantOrders.filter((o) => o.affiliate_id === mem.user_id);
+          const attributed = storefrontOrders.filter((o) => o.affiliate_id === mem.user_id);
           return {
             member: mem,
             orderCount: attributed.length,
             gmv: attributed.reduce((s, o) => s + Number(o.total_amount), 0),
           };
         }),
-    [members, tenantOrders],
+    [members, storefrontOrders],
   );
 
   const resellerRows = useMemo(
@@ -181,15 +227,58 @@ export function SaasDashboard() {
       members
         .filter((mem) => mem.role === 'RESELLER')
         .map((mem) => {
-          const attributed = tenantOrders.filter((o) => o.reseller_id === mem.user_id);
+          const attributed = storefrontOrders.filter((o) => o.reseller_id === mem.user_id);
           return {
             member: mem,
             orderCount: attributed.length,
             gmv: attributed.reduce((s, o) => s + Number(o.total_amount), 0),
           };
         }),
-    [members, tenantOrders],
+    [members, storefrontOrders],
   );
+
+  const affiliateAttributedOrders = useMemo(
+    () => storefrontOrders.filter((o) => o.affiliate_id),
+    [storefrontOrders],
+  );
+
+  const saveAffiliateCommission = async (orderId: string) => {
+    if (!tenant) return;
+    const edit = affiliateCommissionEdits[orderId];
+    if (!edit) return;
+    const raw = edit.amount.trim();
+    const parsed = raw === '' ? null : Number(raw);
+    if (parsed !== null && (Number.isNaN(parsed) || parsed < 0)) {
+      toast('Enter a valid commission amount (INR) or leave blank.', 'error');
+      return;
+    }
+    setSavingAffiliateCommissionFor(orderId);
+    const { error } = await supabase
+      .from('orders')
+      .update({
+        affiliate_commission_amount: parsed,
+        affiliate_commission_note: edit.note.trim() || null,
+      })
+      .eq('id', orderId)
+      .eq('tenant_id', tenant.id);
+    setSavingAffiliateCommissionFor(null);
+    if (error) {
+      toast(error.message, 'error');
+      return;
+    }
+    toast('Commission saved.', 'success');
+    setTenantOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              affiliate_commission_amount: parsed,
+              affiliate_commission_note: edit.note.trim() || null,
+            }
+          : o,
+      ),
+    );
+  };
 
   const createStore = async () => {
     if (!user || !form.store_name.trim()) return;
@@ -256,6 +345,8 @@ export function SaasDashboard() {
         logo: branding.logo || null,
         primary_color: branding.primary_color,
         reseller_requirements: branding.reseller_requirements,
+        store_about: branding.store_about,
+        store_terms: branding.store_terms,
         default_affiliate_platform_fee_percent: affFee,
         default_reseller_platform_fee_percent: resFee,
       })
@@ -308,17 +399,142 @@ export function SaasDashboard() {
     fetchData();
   };
 
-  const addProductToStore = async (productId: string) => {
-    if (!tenant) return;
-    const { error } = await supabase.from('tenant_products').insert({
-      tenant_id: tenant.id,
-      product_id: productId,
-    });
-    if (error) {
-      toast(error.message.includes('duplicate') ? 'Already in your store' : error.message, 'error');
+  const openCatalogAddModal = (product: Product) => {
+    setCatalogModal({ mode: 'add', product });
+    setCatalogQtyInput(1);
+  };
+
+  const openCatalogIncreaseModal = (line: TenantProduct) => {
+    setCatalogModal({ mode: 'increase', line });
+    setCatalogQtyInput(line.listing_quantity ?? 1);
+  };
+
+  const closeCatalogModal = () => {
+    if (catalogSubmitting) return;
+    setCatalogModal(null);
+  };
+
+  const submitCatalogModal = async () => {
+    if (!tenant || !user || !catalogModal) return;
+    const qty = Math.floor(Number(catalogQtyInput));
+    if (!Number.isFinite(qty) || qty < 1) {
+      toast('Enter a valid quantity (at least 1).', 'error');
       return;
     }
-    toast('Added to store');
+
+    if (catalogModal.mode === 'add') {
+      const product = catalogModal.product;
+      if (qty > product.stock) {
+        toast(`Only ${product.stock} units in stock.`, 'error');
+        return;
+      }
+      setCatalogSubmitting(true);
+      const unit = Number(product.price) || 0;
+      const total = unit * qty;
+      const { data: ord, error: oErr } = await supabase
+        .from('orders')
+        .insert({
+          buyer_id: user.id,
+          product_id: product.id,
+          quantity: qty,
+          total_amount: total,
+          status: 'confirmed',
+          tenant_id: tenant.id,
+          payment_timing: 'prepaid',
+          payment_status: 'paid',
+          order_kind: 'catalog_procurement',
+        })
+        .select('id')
+        .single();
+      if (oErr) {
+        setCatalogSubmitting(false);
+        toast(oErr.message, 'error');
+        return;
+      }
+      const { error: tpErr } = await supabase.from('tenant_products').insert({
+        tenant_id: tenant.id,
+        product_id: product.id,
+        listing_quantity: qty,
+        catalog_procurement_order_id: ord.id,
+      });
+      if (tpErr) {
+        await supabase.from('orders').delete().eq('id', ord.id);
+        setCatalogSubmitting(false);
+        toast(tpErr.message.includes('duplicate') ? 'Already in your store' : tpErr.message, 'error');
+        return;
+      }
+      const { error: stErr } = await supabase
+        .from('products')
+        .update({ stock: product.stock - qty })
+        .eq('id', product.id);
+      if (stErr) {
+        toast('Listed, but stock update failed: ' + stErr.message, 'error');
+      }
+      setCatalogSubmitting(false);
+      setCatalogModal(null);
+      toast('Product added; vendor catalog purchase recorded.');
+      fetchData();
+      return;
+    }
+
+    const line = catalogModal.line;
+    const p = line.product as Product | undefined;
+    if (!p) {
+      toast('Product not loaded.', 'error');
+      return;
+    }
+    const current = line.listing_quantity ?? 1;
+    if (qty <= current) {
+      toast(`New total must be greater than current listed quantity (${current}).`, 'error');
+      return;
+    }
+    const delta = qty - current;
+    if (delta > p.stock) {
+      toast(`Only ${p.stock} more units available from vendor stock.`, 'error');
+      return;
+    }
+    setCatalogSubmitting(true);
+    const unit = Number(p.price) || 0;
+    const { data: ord, error: oErr } = await supabase
+      .from('orders')
+      .insert({
+        buyer_id: user.id,
+        product_id: p.id,
+        quantity: delta,
+        total_amount: unit * delta,
+        status: 'confirmed',
+        tenant_id: tenant.id,
+        payment_timing: 'prepaid',
+        payment_status: 'paid',
+        order_kind: 'catalog_procurement',
+      })
+      .select('id')
+      .single();
+    if (oErr) {
+      setCatalogSubmitting(false);
+      toast(oErr.message, 'error');
+      return;
+    }
+    const { error: upErr } = await supabase
+      .from('tenant_products')
+      .update({ listing_quantity: qty })
+      .eq('id', line.id);
+    if (upErr) {
+      await supabase.from('orders').delete().eq('id', ord.id);
+      setCatalogSubmitting(false);
+      toast(upErr.message, 'error');
+      return;
+    }
+    const { error: stErr } = await supabase
+      .from('products')
+      .update({ stock: p.stock - delta })
+      .eq('id', p.id);
+    if (stErr) {
+      toast('Listing updated, but stock sync failed: ' + stErr.message, 'error');
+    }
+    setCatalogSubmitting(false);
+    setCatalogModal(null);
+    toast('Additional units purchased.');
     fetchData();
   };
 
@@ -492,11 +708,19 @@ export function SaasDashboard() {
         </Link>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <StatCard title="Plan" value={tenant.subscription_plan === 'pro' ? 'Pro' : 'Starter'} icon={<Crown className="w-5 h-5" />} color="navy" to="/dashboard/saas#saas-subscription" />
         <StatCard title="Status" value={tenant.is_active ? 'Active' : 'Inactive'} icon={<Activity className="w-5 h-5" />} color={tenant.is_active ? 'success' : 'navy'} to="/dashboard/saas#saas-subscription" />
-        <StatCard title="Total Orders" value={String(stats.orders)} icon={<ShoppingCart className="w-5 h-5" />} color="blue" to="/dashboard/saas#saas-orders" />
-        <StatCard title="Store revenue" value={formatINR(stats.revenue)} icon={<DollarSign className="w-5 h-5" />} color="accent" to="/dashboard/saas#saas-orders" />
+        <StatCard title="Storefront orders" value={String(stats.orders)} icon={<ShoppingCart className="w-5 h-5" />} color="blue" to="/dashboard/saas#saas-orders" />
+        <StatCard title="Storefront revenue" value={formatINR(stats.revenue)} icon={<DollarSign className="w-5 h-5" />} color="accent" to="/dashboard/saas#saas-orders" />
+        <StatCard
+          title="Catalog purchases"
+          value={formatINR(stats.procurementRevenue)}
+          icon={<ShoppingBag className="w-5 h-5" />}
+          color="navy"
+          to="/dashboard/saas#saas-orders"
+          subtitle={`${stats.procurementOrders} orders`}
+        />
         <StatCard title="SKUs in store" value={String(stats.catalogCount)} icon={<Package className="w-5 h-5" />} color="success" to="/dashboard/saas#saas-catalog" />
       </div>
 
@@ -505,7 +729,10 @@ export function SaasDashboard() {
           <h2 className="text-lg font-semibold text-navy-900 flex items-center gap-2">
             <ShoppingCart className="w-5 h-5 text-accent-500" /> Orders & payments
           </h2>
-          <p className="text-sm text-navy-500 mt-1">All orders placed through your storefront (prepaid vs postpaid, customer contact).</p>
+          <p className="text-sm text-navy-500 mt-1">
+            Storefront checkouts and catalog procurement (when you buy units from vendors to list). Type column shows
+            which is which.
+          </p>
         </div>
         <div className="overflow-x-auto max-h-[360px]">
           {tenantOrders.length === 0 ? (
@@ -515,6 +742,7 @@ export function SaasDashboard() {
               <thead className="bg-navy-50 sticky top-0 text-left text-navy-600">
                 <tr>
                   <th className="px-4 py-3 font-medium">Date</th>
+                  <th className="px-4 py-3 font-medium">Type</th>
                   <th className="px-4 py-3 font-medium">Product</th>
                   <th className="px-4 py-3 font-medium">Customer</th>
                   <th className="px-4 py-3 font-medium">Amount</th>
@@ -528,6 +756,17 @@ export function SaasDashboard() {
                 {tenantOrders.map((o) => (
                   <tr key={o.id} className="hover:bg-navy-50/50">
                     <td className="px-4 py-2.5 text-navy-500 whitespace-nowrap">{formatDate(o.created_at)}</td>
+                    <td className="px-4 py-2.5 whitespace-nowrap">
+                      <span
+                        className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                          o.order_kind === 'catalog_procurement'
+                            ? 'bg-violet-50 text-violet-700'
+                            : 'bg-navy-100 text-navy-700'
+                        }`}
+                      >
+                        {o.order_kind === 'catalog_procurement' ? 'Catalog buy' : 'Storefront'}
+                      </span>
+                    </td>
                     <td className="px-4 py-2.5 text-navy-900 max-w-[140px] truncate">{o.product?.name ?? '—'}</td>
                     <td className="px-4 py-2.5 max-w-[160px]">
                       <span className="block truncate font-medium text-navy-900">{o.buyer?.name ?? '—'}</span>
@@ -550,6 +789,99 @@ export function SaasDashboard() {
                     <td className="px-4 py-2.5 text-xs text-navy-500 font-mono">{o.reseller_id ? o.reseller_id.slice(0, 8) + '…' : '—'}</td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-navy-100 overflow-hidden" id="saas-affiliate-activity">
+        <div className="px-6 py-4 border-b border-navy-100">
+          <h2 className="text-lg font-semibold text-navy-900 flex items-center gap-2">
+            <Link2 className="w-5 h-5 text-accent-500" /> Affiliate activity
+          </h2>
+          <p className="text-sm text-navy-500 mt-1">
+            Orders with an affiliate on file. Enter commission in INR per order—nothing is auto-calculated from product rules.
+          </p>
+        </div>
+        <div className="overflow-x-auto max-h-[420px]">
+          {affiliateAttributedOrders.length === 0 ? (
+            <p className="p-6 text-sm text-navy-500">No affiliate-attributed orders yet.</p>
+          ) : (
+            <table className="min-w-full text-sm">
+              <thead className="bg-navy-50 sticky top-0 text-left text-navy-600">
+                <tr>
+                  <th className="px-4 py-3 font-medium">Date</th>
+                  <th className="px-4 py-3 font-medium">Product</th>
+                  <th className="px-4 py-3 font-medium">Customer</th>
+                  <th className="px-4 py-3 font-medium">Order total</th>
+                  <th className="px-4 py-3 font-medium">Affiliate</th>
+                  <th className="px-4 py-3 font-medium">Commission (INR)</th>
+                  <th className="px-4 py-3 font-medium">Note</th>
+                  <th className="px-4 py-3 font-medium w-24" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-navy-100">
+                {affiliateAttributedOrders.map((o) => {
+                  const edit = affiliateCommissionEdits[o.id] ?? { amount: '', note: '' };
+                  return (
+                    <tr key={o.id} className="hover:bg-navy-50/50 align-top">
+                      <td className="px-4 py-2.5 text-navy-500 whitespace-nowrap">{formatDate(o.created_at)}</td>
+                      <td className="px-4 py-2.5 text-navy-900 max-w-[120px] truncate">{o.product?.name ?? '—'}</td>
+                      <td className="px-4 py-2.5 max-w-[140px]">
+                        <span className="block truncate font-medium text-navy-900">{o.buyer?.name ?? '—'}</span>
+                        <span className="block truncate text-xs text-navy-400">{o.buyer?.email ?? ''}</span>
+                      </td>
+                      <td className="px-4 py-2.5 font-semibold text-navy-900 whitespace-nowrap">
+                        {formatINR(o.total_amount)}
+                      </td>
+                      <td className="px-4 py-2.5 max-w-[130px]">
+                        <span className="block truncate font-medium text-navy-900">{o.affiliate?.name ?? '—'}</span>
+                        <span className="block truncate text-xs text-navy-400">{o.affiliate?.email ?? ''}</span>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          className="w-28 rounded border border-navy-200 px-2 py-1 text-sm text-navy-900"
+                          value={edit.amount}
+                          onChange={(e) =>
+                            setAffiliateCommissionEdits((prev) => ({
+                              ...prev,
+                              [o.id]: { ...edit, amount: e.target.value },
+                            }))
+                          }
+                          placeholder="—"
+                        />
+                      </td>
+                      <td className="px-4 py-2.5 max-w-[200px]">
+                        <input
+                          type="text"
+                          className="w-full min-w-[140px] rounded border border-navy-200 px-2 py-1 text-sm text-navy-900"
+                          value={edit.note}
+                          onChange={(e) =>
+                            setAffiliateCommissionEdits((prev) => ({
+                              ...prev,
+                              [o.id]: { ...edit, note: e.target.value },
+                            }))
+                          }
+                          placeholder="Optional"
+                        />
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <button
+                          type="button"
+                          onClick={() => void saveAffiliateCommission(o.id)}
+                          disabled={savingAffiliateCommissionFor === o.id}
+                          className="rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-600 disabled:opacity-50 whitespace-nowrap"
+                        >
+                          {savingAffiliateCommissionFor === o.id ? 'Saving…' : 'Save'}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -645,7 +977,9 @@ export function SaasDashboard() {
             <Package className="w-5 h-5 text-accent-500" /> Store catalog
           </h2>
           <p className="text-sm text-navy-500 mt-1">
-            Pick vendor products to list in your public storefront. Shoppers use the store link below; affiliates and resellers participate through that same store.
+            Pick vendor products and choose how many units to buy from the vendor; only that quantity is billed to
+            vendors and drawn from stock. Shoppers use the store link below; affiliates and resellers participate through
+            that same store.
           </p>
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 lg:divide-x divide-navy-100">
@@ -680,10 +1014,11 @@ export function SaasDashboard() {
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-navy-900 truncate">{p.name}</p>
                       <p className="text-xs text-navy-500">{formatINR(p.price)}</p>
+                      <p className="text-xs text-navy-400">Vendor stock: {p.stock ?? 0}</p>
                     </div>
                     <button
                       type="button"
-                      onClick={() => addProductToStore(p.id)}
+                      onClick={() => openCatalogAddModal(p)}
                       className="shrink-0 inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-accent-500 text-white text-xs font-medium hover:bg-accent-600"
                     >
                       <Plus className="w-3 h-3" /> Add
@@ -715,8 +1050,18 @@ export function SaasDashboard() {
                       )}
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium text-navy-900 truncate">{p?.name || 'Product'}</p>
-                        <p className="text-xs text-navy-500">{p ? formatINR(p.price) : ''}</p>
+                        <p className="text-xs text-navy-500">
+                          {p ? formatINR(p.price) : ''}
+                          {p ? ` · listed qty ${line.listing_quantity ?? 1}` : ''}
+                        </p>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => openCatalogIncreaseModal(line)}
+                        className="shrink-0 inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-navy-200 text-navy-700 text-xs font-medium hover:bg-navy-50"
+                      >
+                        <TrendingUp className="w-3 h-3" /> Add units
+                      </button>
                       <button
                         type="button"
                         onClick={() => removeProductFromStore(line.id)}
@@ -827,6 +1172,28 @@ export function SaasDashboard() {
                 onChange={(e) => setBranding({ ...branding, reseller_requirements: e.target.value })}
                 rows={4}
                 className="w-full px-3 py-2 border border-navy-200 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-navy-700 mb-1">Storefront — About us</label>
+              <p className="text-xs text-navy-500 mb-1">Plain text shown on your public store’s About page.</p>
+              <textarea
+                value={branding.store_about}
+                onChange={(e) => setBranding({ ...branding, store_about: e.target.value })}
+                rows={5}
+                className="w-full px-3 py-2 border border-navy-200 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none text-sm"
+                placeholder="Tell shoppers about your store…"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-navy-700 mb-1">Storefront — Terms &amp; conditions</label>
+              <p className="text-xs text-navy-500 mb-1">Plain text shown on your public store’s Terms page.</p>
+              <textarea
+                value={branding.store_terms}
+                onChange={(e) => setBranding({ ...branding, store_terms: e.target.value })}
+                rows={6}
+                className="w-full px-3 py-2 border border-navy-200 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none text-sm"
+                placeholder="Shipping, returns, liability, etc."
               />
             </div>
             <div className="grid sm:grid-cols-2 gap-4">
@@ -993,12 +1360,18 @@ export function SaasDashboard() {
           </h2>
           <div className="space-y-3">
             <div className="flex justify-between text-sm">
-              <span className="text-navy-500">Total Orders</span>
+              <span className="text-navy-500">Storefront orders</span>
               <span className="font-semibold text-navy-900">{stats.orders}</span>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-navy-500">Store revenue (orders)</span>
+              <span className="text-navy-500">Storefront revenue</span>
               <span className="font-semibold text-navy-900">{formatINR(stats.revenue)}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-navy-500">Vendor catalog purchases</span>
+              <span className="font-semibold text-navy-900">
+                {stats.procurementOrders} · {formatINR(stats.procurementRevenue)}
+              </span>
             </div>
           </div>
         </div>
@@ -1039,6 +1412,103 @@ export function SaasDashboard() {
             Send Invite
           </button>
         </div>
+      </Modal>
+
+      <Modal
+        isOpen={catalogModal !== null}
+        onClose={closeCatalogModal}
+        title={
+          catalogModal?.mode === 'add'
+            ? 'Buy units & add to store'
+            : catalogModal?.mode === 'increase'
+              ? 'Increase listed quantity'
+              : ''
+        }
+        size="sm"
+      >
+        {catalogModal?.mode === 'add' ? (
+          <div className="space-y-4">
+            <div>
+              <p className="text-sm font-medium text-navy-900">{catalogModal.product.name}</p>
+              <p className="text-xs text-navy-500 mt-1">
+                {formatINR(catalogModal.product.price)} per unit · {catalogModal.product.stock} in stock
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-navy-700 mb-1">Units to purchase from vendor</label>
+              <input
+                type="number"
+                min={1}
+                max={catalogModal.product.stock}
+                value={catalogQtyInput}
+                onChange={(e) => setCatalogQtyInput(Number(e.target.value))}
+                className="w-full px-3 py-2 border border-navy-200 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none"
+              />
+            </div>
+            <p className="text-sm text-navy-700">
+              Line total:{' '}
+              <span className="font-semibold text-navy-900">
+                {formatINR(Math.max(0, Number(catalogModal.product.price) || 0) * Math.max(1, catalogQtyInput))}
+              </span>
+            </p>
+            <p className="text-xs text-navy-500">
+              Creates a B2B order visible to the vendor and records your listed quantity for this SKU.
+            </p>
+            <button
+              type="button"
+              onClick={() => void submitCatalogModal()}
+              disabled={catalogSubmitting}
+              className="w-full py-2.5 bg-accent-500 hover:bg-accent-600 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
+            >
+              {catalogSubmitting ? 'Saving…' : 'Confirm purchase & list'}
+            </button>
+          </div>
+        ) : catalogModal?.mode === 'increase' ? (
+          <div className="space-y-4">
+            {(() => {
+              const line = catalogModal.line;
+              const p = line.product as Product | undefined;
+              if (!p) return <p className="text-sm text-navy-500">Product not loaded.</p>;
+              const current = line.listing_quantity ?? 1;
+              const maxTotal = current + p.stock;
+              const unit = Number(p.price) || 0;
+              const nextTotal = Math.max(current + 1, Math.min(maxTotal, Math.floor(Number(catalogQtyInput)) || current + 1));
+              const delta = Math.max(0, nextTotal - current);
+              return (
+                <>
+                  <div>
+                    <p className="text-sm font-medium text-navy-900">{p.name}</p>
+                    <p className="text-xs text-navy-500 mt-1">
+                      Currently listed: <strong>{current}</strong> · Vendor stock: {p.stock} · Max new total: {maxTotal}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-navy-700 mb-1">New total listed quantity</label>
+                    <input
+                      type="number"
+                      min={current + 1}
+                      max={maxTotal}
+                      value={catalogQtyInput}
+                      onChange={(e) => setCatalogQtyInput(Number(e.target.value))}
+                      className="w-full px-3 py-2 border border-navy-200 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none"
+                    />
+                  </div>
+                  <p className="text-sm text-navy-700">
+                    Additional units: {delta} · Charge: <span className="font-semibold">{formatINR(unit * delta)}</span>
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void submitCatalogModal()}
+                    disabled={catalogSubmitting}
+                    className="w-full py-2.5 bg-accent-500 hover:bg-accent-600 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
+                  >
+                    {catalogSubmitting ? 'Saving…' : 'Buy additional units'}
+                  </button>
+                </>
+              );
+            })()}
+          </div>
+        ) : null}
       </Modal>
     </div>
   );

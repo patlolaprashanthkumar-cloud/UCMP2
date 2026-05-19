@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useStoreRole } from '../../hooks/useStoreRole';
 import { notifyStoreBasketUpdated } from '../../lib/storeEvents';
+import { storeSellableUnits } from '../../lib/storeInventory';
 import type { StoreCartItem, Product } from '../../types';
 import { Package, Trash2, ShoppingBag } from 'lucide-react';
 import type { StoreOutletContext } from './storeTypes';
@@ -21,6 +22,8 @@ export function StoreCartPage() {
   const { hideStockNumbers } = useStoreRole(tenant.id);
   const [lines, setLines] = useState<StoreCartItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [unitPrices, setUnitPrices] = useState<Record<string, number>>({});
+  const [listingByProductId, setListingByProductId] = useState<Record<string, number>>({});
 
   const accent = tenant.primary_color || '#ea580c';
 
@@ -62,15 +65,86 @@ export function StoreCartPage() {
     };
   }, [user, tenant.id]);
 
+  useEffect(() => {
+    let cancel = false;
+    void (async () => {
+      if (!lines.length) {
+        if (!cancel) setUnitPrices({});
+        return;
+      }
+      const ids = [...new Set(lines.map((r) => r.product_id))];
+      const { data: marginRows } = ids.length
+        ? await supabase
+            .from('tenant_store_reseller_product_margins')
+            .select('product_id, user_id, margin_amount')
+            .eq('tenant_id', tenant.id)
+            .in('product_id', ids)
+        : { data: [] as { product_id: string; user_id: string; margin_amount: number }[] };
+      if (cancel) return;
+      const marginMap = new Map<string, number>();
+      for (const m of marginRows || []) {
+        marginMap.set(`${m.product_id}:${m.user_id}`, Number(m.margin_amount));
+      }
+      const next: Record<string, number> = {};
+      for (const line of lines) {
+        const p = line.product as Product | undefined;
+        if (!p) continue;
+        let unit = p.price;
+        if (line.offered_by_reseller_id) {
+          const add = marginMap.get(`${p.id}:${line.offered_by_reseller_id}`) ?? 0;
+          unit = p.price + add;
+        }
+        next[line.id] = unit;
+      }
+      setUnitPrices(next);
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, [lines, tenant.id]);
+
+  function maxQtyForLine(prod: Product, purchaseIntent: string | null | undefined): number {
+    if (purchaseIntent === 'resale_stock') return Math.max(0, Math.floor(Number(prod.stock)) || 0);
+    return storeSellableUnits(listingByProductId[prod.id] ?? 0, prod.stock);
+  }
+
+  useEffect(() => {
+    let cancel = false;
+    void (async () => {
+      if (!lines.length) {
+        if (!cancel) setListingByProductId({});
+        return;
+      }
+      const ids = [...new Set(lines.map((r) => r.product_id))];
+      const { data: rows } = await supabase
+        .from('tenant_products')
+        .select('product_id, listing_quantity')
+        .eq('tenant_id', tenant.id)
+        .in('product_id', ids);
+      if (cancel) return;
+      const map: Record<string, number> = {};
+      for (const row of rows || []) {
+        const pid = (row as { product_id: string }).product_id;
+        const lq = Number((row as { listing_quantity?: number }).listing_quantity);
+        map[pid] = Number.isFinite(lq) ? lq : 0;
+      }
+      setListingByProductId(map);
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, [lines, tenant.id]);
+
   async function setQuantity(lineId: string, next: number) {
     if (next < 1) return;
     const line = lines.find((l) => l.id === lineId);
     const prod = line?.product as Product | undefined;
-    if (prod && next > prod.stock) {
+    const cap = prod ? maxQtyForLine(prod, line?.purchase_intent) : 0;
+    if (prod && next > cap) {
       toast(
         hideStockNumbers
           ? 'Maximum available quantity reached for this item.'
-          : `Only ${prod.stock} in stock for ${prod.name}`,
+          : `Only ${cap} available for ${prod.name}`,
         'error',
       );
       return;
@@ -94,7 +168,16 @@ export function StoreCartPage() {
     const cur = line.size ?? null;
     if (cur === newSize) return;
 
-    const maxQ = Math.max(1, prod.stock);
+    const maxQ = maxQtyForLine(prod, line.purchase_intent);
+    if (maxQ < 1) {
+      toast(
+        hideStockNumbers
+          ? 'This item is no longer available.'
+          : `${prod.name} is out of stock for this store.`,
+        'error',
+      );
+      return;
+    }
     const qty = Math.min(line.quantity, maxQ);
 
     let existingQ = supabase
@@ -104,6 +187,16 @@ export function StoreCartPage() {
       .eq('user_id', user.id)
       .eq('product_id', prod.id)
       .eq('size', newSize);
+    if (line.offered_by_reseller_id) {
+      existingQ = existingQ.eq('offered_by_reseller_id', line.offered_by_reseller_id);
+    } else {
+      existingQ = existingQ.is('offered_by_reseller_id', null);
+    }
+    if (line.purchase_intent === 'resale_stock') {
+      existingQ = existingQ.eq('purchase_intent', 'resale_stock');
+    } else {
+      existingQ = existingQ.is('purchase_intent', null);
+    }
     const { data: existing } = await existingQ.maybeSingle();
 
     if (existing) {
@@ -122,7 +215,10 @@ export function StoreCartPage() {
         return;
       }
     } else {
-      const { error } = await supabase.from('store_cart_items').update({ size: newSize, quantity: qty }).eq('id', lineId);
+      const { error } = await supabase
+        .from('store_cart_items')
+        .update({ size: newSize, quantity: qty })
+        .eq('id', lineId);
       if (error) {
         toast(error.message, 'error');
         return;
@@ -145,7 +241,9 @@ export function StoreCartPage() {
 
   const subtotal = lines.reduce((s, l) => {
     const p = l.product as Product | undefined;
-    return s + (p ? p.price * l.quantity : 0);
+    if (!p) return s;
+    const u = unitPrices[l.id] ?? p.price;
+    return s + u * l.quantity;
   }, 0);
 
   if (!user) {
@@ -211,12 +309,24 @@ export function StoreCartPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <Link
-                      to={`/store/${slug}/product/${p.id}`}
+                      to={
+                        line.offered_by_reseller_id
+                          ? `/store/${slug}/product/${p.id}?reseller=${line.offered_by_reseller_id}`
+                          : `/store/${slug}/product/${p.id}`
+                      }
                       className="font-semibold text-[var(--sf-fg)] hover:underline line-clamp-2"
                     >
                       {p.name}
                     </Link>
-                    <p className="text-sm text-[var(--sf-muted)] mt-1">{formatINR(p.price)} each</p>
+                    {line.purchase_intent === 'resale_stock' ? (
+                      <p className="text-xs text-amber-800 font-medium mt-0.5">For resale stock (base price)</p>
+                    ) : null}
+                    {line.offered_by_reseller_id ? (
+                      <p className="text-xs text-[var(--sf-muted)] mt-0.5">Reseller listing</p>
+                    ) : null}
+                    <p className="text-sm text-[var(--sf-muted)] mt-1">
+                      {formatINR(unitPrices[line.id] ?? p.price)} each
+                    </p>
                     {opts.length > 0 ? (
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <label className="text-xs text-[var(--sf-muted)]">Size</label>
@@ -262,7 +372,9 @@ export function StoreCartPage() {
                     </div>
                   </div>
                   <div className="text-right shrink-0">
-                    <p className="font-bold text-[var(--sf-fg)]">{formatINR(p.price * line.quantity)}</p>
+                    <p className="font-bold text-[var(--sf-fg)]">
+                      {formatINR((unitPrices[line.id] ?? p.price) * line.quantity)}
+                    </p>
                   </div>
                 </li>
               );

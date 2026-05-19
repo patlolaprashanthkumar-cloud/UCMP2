@@ -5,6 +5,7 @@ import { formatINR } from '../../lib/format';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { notifyStoreBasketUpdated } from '../../lib/storeEvents';
+import { storeSellableUnits } from '../../lib/storeInventory';
 import type { Product, StoreCartItem, OrderPaymentTiming, StoreDeliveryAddress } from '../../types';
 import type { StoreOutletContext } from './storeTypes';
 
@@ -18,6 +19,9 @@ type CheckoutLine = {
   product: Product;
   size: string | null;
   fromCartLineId?: string;
+  offered_by_reseller_id: string | null;
+  purchase_intent: string | null;
+  unit_price: number;
 };
 
 export function StoreCheckoutPage() {
@@ -84,12 +88,14 @@ export function StoreCheckoutPage() {
       const productId = searchParams.get('productId');
       const qtyRaw = searchParams.get('qty');
       const sizeParam = searchParams.get('size');
+      const resellerQs = searchParams.get('reseller');
+      const resaleStock = searchParams.get('resale') === '1';
 
       if (productId && qtyRaw) {
         const q = Math.max(1, parseInt(qtyRaw, 10) || 1);
         const { data: link } = await supabase
           .from('tenant_products')
-          .select('product_id')
+          .select('product_id, listing_quantity')
           .eq('tenant_id', tenant.id)
           .eq('product_id', productId)
           .maybeSingle();
@@ -98,9 +104,12 @@ export function StoreCheckoutPage() {
           setLoading(false);
           return;
         }
+        const listingQty = Number((link as { listing_quantity?: number }).listing_quantity);
+        const lq = Number.isFinite(listingQty) ? listingQty : 0;
         const { data: p } = await supabase.from('products').select('*').eq('id', productId).eq('is_active', true).maybeSingle();
         const prod = p as Product | null;
-        if (!prod || prod.stock < 1) {
+        const sellable = storeSellableUnits(lq, prod?.stock ?? 0);
+        if (!prod || sellable < 1) {
           if (!cancel) setLines([]);
           setLoading(false);
           return;
@@ -111,8 +120,39 @@ export function StoreCheckoutPage() {
           const picked = sizeParam && opts.includes(sizeParam) ? sizeParam : opts[0];
           lineSize = picked;
         }
-        const quantity = Math.min(q, prod.stock);
-        if (!cancel) setLines([{ product_id: prod.id, quantity, product: prod, size: lineSize }]);
+        const quantity = Math.min(q, sellable);
+
+        let unitPrice = prod.price;
+        let offeredBy: string | null = null;
+        let purchaseIntent: string | null = resaleStock ? 'resale_stock' : null;
+        if (!resaleStock && resellerQs && isUuid(resellerQs)) {
+          const { data: mrow } = await supabase
+            .from('tenant_store_reseller_product_margins')
+            .select('user_id, margin_amount')
+            .eq('tenant_id', tenant.id)
+            .eq('product_id', productId)
+            .eq('user_id', resellerQs)
+            .maybeSingle();
+          const m = mrow as { margin_amount: number } | null;
+          if (m && Number(m.margin_amount) > 0) {
+            unitPrice = prod.price + Number(m.margin_amount);
+            offeredBy = resellerQs;
+          }
+        }
+
+        if (!cancel) {
+          setLines([
+            {
+              product_id: prod.id,
+              quantity,
+              product: prod,
+              size: lineSize,
+              offered_by_reseller_id: offeredBy,
+              purchase_intent: purchaseIntent,
+              unit_price: unitPrice,
+            },
+          ]);
+        }
       } else {
         const { data: cart } = await supabase
           .from('store_cart_items')
@@ -120,15 +160,46 @@ export function StoreCheckoutPage() {
           .eq('tenant_id', tenant.id)
           .eq('user_id', user.id);
         const rows = (cart || []) as StoreCartItem[];
+        const ids = [...new Set(rows.map((r) => r.product_id))];
+        const { data: listingRows } = ids.length
+          ? await supabase
+              .from('tenant_products')
+              .select('product_id, listing_quantity')
+              .eq('tenant_id', tenant.id)
+              .in('product_id', ids)
+          : { data: [] as { product_id: string; listing_quantity: number }[] };
+        const listingMap: Record<string, number> = {};
+        for (const row of listingRows || []) {
+          const lq = Number((row as { listing_quantity?: number }).listing_quantity);
+          listingMap[(row as { product_id: string }).product_id] = Number.isFinite(lq) ? lq : 0;
+        }
+        const { data: marginRows } = ids.length
+          ? await supabase
+              .from('tenant_store_reseller_product_margins')
+              .select('product_id, user_id, margin_amount')
+              .eq('tenant_id', tenant.id)
+              .in('product_id', ids)
+          : { data: [] as { product_id: string; user_id: string; margin_amount: number }[] };
+        const marginMap = new Map<string, number>();
+        for (const m of marginRows || []) {
+          marginMap.set(`${m.product_id}:${m.user_id}`, Number(m.margin_amount));
+        }
         const out: CheckoutLine[] = [];
         for (const r of rows) {
           const p = r.product as Product | undefined;
-          if (!p || p.stock < 1) continue;
-          const quantity = Math.min(r.quantity, p.stock);
+          if (!p) continue;
+          const sellable = storeSellableUnits(listingMap[p.id] ?? 0, p.stock);
+          if (sellable < 1) continue;
+          const quantity = Math.min(r.quantity, sellable);
           const opts = p.sizes && p.sizes.length > 0 ? p.sizes : [];
           let sz: string | null = r.size ?? null;
           if (opts.length > 0 && (!sz || !opts.includes(sz))) {
             sz = opts[0] ?? null;
+          }
+          let unitPrice = p.price;
+          if (r.offered_by_reseller_id) {
+            const add = marginMap.get(`${p.id}:${r.offered_by_reseller_id}`) ?? 0;
+            unitPrice = p.price + add;
           }
           out.push({
             product_id: p.id,
@@ -136,6 +207,9 @@ export function StoreCheckoutPage() {
             product: p,
             size: opts.length ? sz : null,
             fromCartLineId: r.id,
+            offered_by_reseller_id: r.offered_by_reseller_id ?? null,
+            purchase_intent: r.purchase_intent ?? null,
+            unit_price: unitPrice,
           });
         }
         if (!cancel) setLines(out);
@@ -149,7 +223,7 @@ export function StoreCheckoutPage() {
   }, [user, tenant.id, searchParams]);
 
   const subtotal = useMemo(
-    () => lines?.reduce((s, l) => s + l.product.price * l.quantity, 0) ?? 0,
+    () => lines?.reduce((s, l) => s + l.unit_price * l.quantity, 0) ?? 0,
     [lines],
   );
 
@@ -181,40 +255,38 @@ export function StoreCheckoutPage() {
       /* ignore */
     }
 
-    let resellerId: string | null = null;
+    let sessionReseller: string | null = null;
     try {
       const r = sessionStorage.getItem(`ucmp_store_reseller_${tenant.id}`);
-      if (r && isUuid(r) && r !== user.id) resellerId = r;
+      if (r && isUuid(r) && r !== user.id) sessionReseller = r;
     } catch {
       /* ignore */
     }
-    const { data: member } = await supabase
-      .from('tenant_members')
-      .select('role')
-      .eq('tenant_id', tenant.id)
-      .eq('user_id', user.id)
-      .maybeSingle();
-    if (!resellerId && member?.role === 'RESELLER') resellerId = user.id;
 
     const payStatus = paymentTiming === 'prepaid' ? 'paid' : 'pending';
     const snapshot = selectedAddress ? shippingSnapshotFromAddress(selectedAddress) : null;
 
     for (const line of lines) {
+      let lineReseller: string | null = null;
+      if (line.offered_by_reseller_id) lineReseller = line.offered_by_reseller_id;
+      else if (sessionReseller) lineReseller = sessionReseller;
+
       const { error } = await supabase.from('orders').insert({
         buyer_id: user.id,
         product_id: line.product_id,
         quantity: line.quantity,
-        total_amount: line.product.price * line.quantity,
+        total_amount: line.unit_price * line.quantity,
         status: 'confirmed',
         tenant_id: tenant.id,
         affiliate_id: affiliateId,
-        reseller_id: resellerId,
+        reseller_id: lineReseller,
         payment_timing: paymentTiming,
         payment_status: payStatus,
         customer_email: customerEmail.trim() || null,
         customer_phone: customerPhone.trim() || null,
         shipping_snapshot: snapshot,
         size: line.size,
+        order_kind: 'storefront',
       });
       if (error) {
         toast(error.message, 'error');
@@ -276,14 +348,17 @@ export function StoreCheckoutPage() {
       <ul className="space-y-3 mb-8">
         {lines.map((line) => (
           <li
-            key={`${line.product_id}|${line.size ?? ''}|${line.fromCartLineId || 'd'}`}
+            key={`${line.product_id}|${line.size ?? ''}|${line.offered_by_reseller_id ?? ''}|${line.purchase_intent ?? ''}|${line.fromCartLineId || 'd'}`}
             className="flex justify-between gap-4 text-sm border border-[var(--sf-border)] rounded-xl p-4 bg-[var(--sf-surface)]"
           >
             <span className="text-[var(--sf-fg)] font-medium">
               {line.product.name}
               {line.size ? ` · ${line.size}` : ''} × {line.quantity}
+              {line.purchase_intent === 'resale_stock' ? (
+                <span className="block text-xs text-amber-700 font-normal">Resale stock (base price)</span>
+              ) : null}
             </span>
-            <span className="font-bold shrink-0">{formatINR(line.product.price * line.quantity)}</span>
+            <span className="font-bold shrink-0">{formatINR(line.unit_price * line.quantity)}</span>
           </li>
         ))}
       </ul>

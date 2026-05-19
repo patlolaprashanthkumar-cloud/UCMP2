@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { Search, Eye, ToggleLeft, ToggleRight, Users } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useToast } from '../../../context/ToastContext';
@@ -23,7 +24,9 @@ export function AdminUsers() {
   const [selectedUser, setSelectedUser] = useState<Profile | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [detailKyc, setDetailKyc] = useState<KYC | null>(null);
-  const [detailTenants, setDetailTenants] = useState<{ store_name: string; slug: string; role: string }[]>([]);
+  const [detailTenants, setDetailTenants] = useState<
+    { id: string; store_name: string; slug: string; role: string }[]
+  >([]);
   const [detailLoading, setDetailLoading] = useState(false);
 
   const fetchUsers = useCallback(async () => {
@@ -72,14 +75,18 @@ export function AdminUsers() {
     setDetailTenants([]);
     const [{ data: kycRow }, { data: mems }] = await Promise.all([
       supabase.from('kyc').select('*').eq('user_id', user.id).maybeSingle(),
-      supabase.from('tenant_members').select('role, tenant:saas_tenants(store_name, slug)').eq('user_id', user.id),
+      supabase.from('tenant_members').select('role, tenant:saas_tenants(id, store_name, slug)').eq('user_id', user.id),
     ]);
     setDetailKyc(kycRow as KYC | null);
-    const rows = (mems || []) as unknown as { role: string; tenant: { store_name: string; slug: string } | null }[];
+    const rows = (mems || []) as unknown as {
+      role: string;
+      tenant: { id: string; store_name: string; slug: string } | null;
+    }[];
     setDetailTenants(
       rows
         .filter((m) => m.tenant)
         .map((m) => ({
+          id: m.tenant!.id,
           store_name: m.tenant!.store_name,
           slug: m.tenant!.slug,
           role: m.role,
@@ -214,11 +221,19 @@ export function AdminUsers() {
             {detailTenants.length > 0 && (
               <div>
                 <h3 className="font-semibold text-slate-900 mb-2">Store memberships</h3>
-                <ul className="space-y-1 text-sm">
+                <ul className="space-y-2 text-sm">
                   {detailTenants.map((t) => (
-                    <li key={`${t.slug}-${t.role}`} className="text-slate-700">
-                      <span className="font-medium">{t.store_name}</span>
-                      <span className="text-slate-500"> ({t.slug}) — {t.role}</span>
+                    <li key={`${t.id}-${t.role}`} className="text-slate-700 flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span>
+                        <span className="font-medium">{t.store_name}</span>
+                        <span className="text-slate-500"> ({t.slug}) — {t.role}</span>
+                      </span>
+                      <Link
+                        to={`/dashboard/admin/orders?tenant=${encodeURIComponent(t.id)}`}
+                        className="text-orange-600 font-medium text-xs hover:underline"
+                      >
+                        View store orders
+                      </Link>
                     </li>
                   ))}
                 </ul>

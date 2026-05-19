@@ -134,7 +134,19 @@ export function StoreLayout() {
             <span className="font-semibold text-[var(--sf-fg)] truncate">{tenant.store_name}</span>
           </Link>
 
-          <nav className="flex items-center gap-2 sm:gap-3">
+          <nav className="flex items-center gap-1 sm:gap-2 md:gap-3 flex-wrap justify-end">
+            <Link
+              to={`/store/${slug}/about`}
+              className="hidden sm:inline-flex px-2 py-1.5 rounded-lg text-sm font-medium text-[var(--sf-muted)] hover:text-[var(--sf-fg)] hover:bg-stone-100"
+            >
+              About
+            </Link>
+            <Link
+              to={`/store/${slug}/terms`}
+              className="hidden sm:inline-flex px-2 py-1.5 rounded-lg text-sm font-medium text-[var(--sf-muted)] hover:text-[var(--sf-fg)] hover:bg-stone-100"
+            >
+              Terms
+            </Link>
             <Link
               to={`/store/${slug}#catalog`}
               className="inline-flex items-center gap-2 px-5 py-2.5 sm:px-7 sm:py-3 rounded-full text-sm sm:text-base font-bold text-white shadow-lg hover:opacity-95 transition-opacity shrink-0 order-first sm:order-none"
@@ -201,7 +213,13 @@ export function StoreLayout() {
       <footer className="border-t border-[var(--sf-border)] bg-[var(--sf-surface)] mt-auto">
         <div className="max-w-6xl mx-auto px-4 py-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-[var(--sf-muted)]">
           <p>&copy; {new Date().getFullYear()} {tenant.store_name}</p>
-          <div className="flex flex-wrap items-center justify-center sm:justify-end gap-3">
+          <div className="flex flex-wrap items-center justify-center sm:justify-end gap-x-4 gap-y-2">
+            <Link to={`/store/${slug}/about`} className="text-sm font-medium hover:text-[var(--sf-fg)] hover:underline">
+              About us
+            </Link>
+            <Link to={`/store/${slug}/terms`} className="text-sm font-medium hover:text-[var(--sf-fg)] hover:underline">
+              Terms &amp; conditions
+            </Link>
             <Link
               to={`/store/${slug}#catalog`}
               className="inline-flex items-center justify-center px-8 py-3.5 rounded-full text-base font-bold text-white shadow-md hover:opacity-95 min-w-[10rem]"

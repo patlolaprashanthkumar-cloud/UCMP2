@@ -17,7 +17,7 @@ const TX_TYPE_LABEL: Record<string, string> = {
 };
 
 function buildLast30DaysGMVRows(
-  orders: { created_at: string; total_amount: number | null }[]
+  orders: { created_at: string; total_amount: number | null }[],
 ): { date: string; gmv: number }[] {
   const start = new Date();
   start.setDate(start.getDate() - 29);
@@ -44,7 +44,6 @@ export function AdminAnalytics() {
   const [dailyGMV, setDailyGMV] = useState<{ date: string; gmv: number }[]>([]);
   const [commissionPayouts, setCommissionPayouts] = useState<{ type: string; amount: number }[]>([]);
   const [topEarners, setTopEarners] = useState<{ name: string; earnings: number }[]>([]);
-  const [topProducts, setTopProducts] = useState<{ name: string; sold: number }[]>([]);
 
   useEffect(() => {
     const load = async () => {
@@ -53,14 +52,17 @@ export function AdminAnalytics() {
       start30.setDate(start30.getDate() - 29);
       start30.setHours(0, 0, 0, 0);
 
-      const [usersRes, tenantsRes, ordersRes, orders30Res, txRes, walletRes, orderLinesRes] = await Promise.all([
+      const [usersRes, tenantsRes, ordersRes, orders30Res, txRes, walletRes] = await Promise.all([
         supabase.from('profiles').select('*', { count: 'exact', head: true }),
         supabase.from('saas_tenants').select('*', { count: 'exact', head: true }).eq('is_active', true),
         supabase.from('orders').select('total_amount'),
         supabase.from('orders').select('created_at, total_amount').gte('created_at', start30.toISOString()),
         supabase.from('transactions').select('type, amount').eq('status', 'completed'),
-        supabase.from('wallets').select('total_earned, profiles(name)').order('total_earned', { ascending: false }).limit(5),
-        supabase.from('orders').select('quantity, products(name)'),
+        supabase
+          .from('wallets')
+          .select('total_earned, profiles(name)')
+          .order('total_earned', { ascending: false })
+          .limit(5),
       ]);
 
       const totalGMV = (ordersRes.data || []).reduce((s, o) => s + (o.total_amount || 0), 0);
@@ -87,15 +89,6 @@ export function AdminAnalytics() {
         earners.push({ name: prof?.name || 'Unknown', earnings: row.total_earned || 0 });
       }
       setTopEarners(earners);
-
-      const prodMap = new Map<string, number>();
-      for (const row of orderLinesRes.data || []) {
-        const prod = row.products as { name?: string } | null;
-        const name = prod?.name || 'Unknown';
-        prodMap.set(name, (prodMap.get(name) || 0) + (row.quantity || 0));
-      }
-      const top = [...prodMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, sold]) => ({ name, sold }));
-      setTopProducts(top);
 
       setLoading(false);
     };
@@ -147,57 +140,30 @@ export function AdminAnalytics() {
           )}
         </div>
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-xl border border-slate-200 p-5">
-          <h2 className="text-sm font-semibold text-slate-900 mb-4">Top 5 by wallet (total earned)</h2>
-          {topEarners.length === 0 ? (
-            <p className="text-sm text-slate-500 py-8 text-center">No wallet data yet.</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-200">
-                  <th className="text-left py-2 font-semibold text-slate-900">#</th>
-                  <th className="text-left py-2 font-semibold text-slate-900">Name</th>
-                  <th className="text-right py-2 font-semibold text-slate-900">Total earned</th>
+      <div className="bg-white rounded-xl border border-slate-200 p-5 max-w-2xl">
+        <h2 className="text-sm font-semibold text-slate-900 mb-4">Top 5 by wallet (total earned)</h2>
+        {topEarners.length === 0 ? (
+          <p className="text-sm text-slate-500 py-8 text-center">No wallet data yet.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200">
+                <th className="text-left py-2 font-semibold text-slate-900">#</th>
+                <th className="text-left py-2 font-semibold text-slate-900">Name</th>
+                <th className="text-right py-2 font-semibold text-slate-900">Total earned</th>
+              </tr>
+            </thead>
+            <tbody>
+              {topEarners.map((u, i) => (
+                <tr key={i} className="border-b border-slate-100">
+                  <td className="py-2 text-slate-500">{i + 1}</td>
+                  <td className="py-2 text-slate-900 font-medium">{u.name}</td>
+                  <td className="py-2 text-right text-slate-900">{formatINR(u.earnings)}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {topEarners.map((u, i) => (
-                  <tr key={i} className="border-b border-slate-100">
-                    <td className="py-2 text-slate-500">{i + 1}</td>
-                    <td className="py-2 text-slate-900 font-medium">{u.name}</td>
-                    <td className="py-2 text-right text-slate-900">{formatINR(u.earnings)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-        <div className="bg-white rounded-xl border border-slate-200 p-5">
-          <h2 className="text-sm font-semibold text-slate-900 mb-4">Top selling products (by units in orders)</h2>
-          {topProducts.length === 0 ? (
-            <p className="text-sm text-slate-500 py-8 text-center">No order line data yet.</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-200">
-                  <th className="text-left py-2 font-semibold text-slate-900">#</th>
-                  <th className="text-left py-2 font-semibold text-slate-900">Product</th>
-                  <th className="text-right py-2 font-semibold text-slate-900">Units sold</th>
-                </tr>
-              </thead>
-              <tbody>
-                {topProducts.map((p, i) => (
-                  <tr key={i} className="border-b border-slate-100">
-                    <td className="py-2 text-slate-500">{i + 1}</td>
-                    <td className="py-2 text-slate-900 font-medium">{p.name}</td>
-                    <td className="py-2 text-right text-slate-900">{p.sold.toLocaleString('en-IN')}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );

@@ -27,8 +27,8 @@ export function VendorOrders() {
   const totalPages = Math.ceil(total / PER_PAGE);
 
   const earnings = useMemo(() => {
-    const delivered = allOrders.filter((o) => o.status === 'delivered');
-    const totalSales = delivered.reduce((s, o) => s + o.total_amount, 0);
+    const active = allOrders.filter((o) => o.status !== 'cancelled' && o.status !== 'returned');
+    const totalSales = active.reduce((s, o) => s + o.total_amount, 0);
     return { totalSales, platformCut: totalSales * 0.3, netReceived: totalSales * 0.7 };
   }, [allOrders]);
 
@@ -48,7 +48,7 @@ export function VendorOrders() {
     setLoading(true);
     let query = supabase
       .from('orders')
-      .select('*, product:products!inner(*), buyer:profiles!orders_buyer_id_fkey(*)', { count: 'exact' })
+      .select('*, product:products!inner(*), buyer:profiles!orders_buyer_id_fkey(name)', { count: 'exact' })
       .eq('product.vendor_id', user.id)
       .order('created_at', { ascending: false });
     if (statusFilter !== 'all') query = query.eq('status', statusFilter);
@@ -79,10 +79,14 @@ export function VendorOrders() {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-navy-900">Orders Received</h1>
+      <p className="text-sm text-navy-600 max-w-2xl">
+        B2B only: purchases by <strong>SaaS store owners</strong>. End-customer storefront orders are managed by the
+        store owner and do not appear here.
+      </p>
 
       {/* Earnings summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <StatCard title="Total Sales" value={formatINR(earnings.totalSales)} icon={<DollarSign className="w-5 h-5" />} color="accent" />
+        <StatCard title="Total Sales (B2B)" value={formatINR(earnings.totalSales)} icon={<DollarSign className="w-5 h-5" />} color="accent" />
         <StatCard title="Platform Cut (30%)" value={formatINR(earnings.platformCut)} icon={<PieChart className="w-5 h-5" />} color="navy" />
         <StatCard title="Net Received (70%)" value={formatINR(earnings.netReceived)} icon={<Wallet className="w-5 h-5" />} color="success" />
       </div>
@@ -107,14 +111,18 @@ export function VendorOrders() {
         {loading ? (
           <div className="p-6"><TableSkeleton rows={5} cols={7} /></div>
         ) : orders.length === 0 ? (
-          <EmptyState icon={<ShoppingBag className="w-8 h-8 text-navy-300" />} title="No orders found" description="Orders for your products will appear here." />
+          <EmptyState
+            icon={<ShoppingBag className="w-8 h-8 text-navy-300" />}
+            title="No B2B orders yet"
+            description="When a SaaS store owner buys your catalog products, those orders appear here."
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-navy-50 text-left text-navy-600">
                   <th className="px-4 py-3 font-medium">Order ID</th>
-                  <th className="px-4 py-3 font-medium">Buyer</th>
+                  <th className="px-4 py-3 font-medium">Store owner</th>
                   <th className="px-4 py-3 font-medium">Product</th>
                   <th className="px-4 py-3 font-medium">Qty</th>
                   <th className="px-4 py-3 font-medium">Amount</th>
@@ -126,7 +134,7 @@ export function VendorOrders() {
                 {orders.map((o) => (
                   <tr key={o.id} className="hover:bg-navy-50/50 transition-colors">
                     <td className="px-4 py-3 font-mono text-xs text-navy-600" title={o.id}>{truncateId(o.id)}</td>
-                    <td className="px-4 py-3 text-navy-700">{o.buyer?.name || 'N/A'}</td>
+                    <td className="px-4 py-3 text-navy-700 font-medium">{o.buyer?.name?.trim() || 'Store owner'}</td>
                     <td className="px-4 py-3 text-navy-900 max-w-[160px] truncate">{o.product?.name || 'N/A'}</td>
                     <td className="px-4 py-3 text-navy-700">{o.quantity}</td>
                     <td className="px-4 py-3 font-medium text-navy-900">{formatINR(o.total_amount)}</td>

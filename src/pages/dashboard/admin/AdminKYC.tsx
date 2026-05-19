@@ -25,7 +25,8 @@ export function AdminKYC() {
     setLoading(true);
     let query = supabase
       .from('kyc')
-      .select('*, profiles(name)', { count: 'exact' })
+      .select('*, profiles!inner(name, role)', { count: 'exact' })
+      .eq('profiles.role', 'SAAS_OWNER')
       .order('created_at', { ascending: false })
       .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
     if (filter !== 'all') query = query.eq('status', filter);
@@ -68,7 +69,7 @@ export function AdminKYC() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-navy-900">KYC Management</h1>
+        <h1 className="text-2xl font-bold text-navy-900">SaaS owner KYC</h1>
         <select
           value={filter}
           onChange={(e) => setFilter(e.target.value)}

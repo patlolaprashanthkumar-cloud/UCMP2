@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { formatINR } from '../../lib/format';
 import { useAuth } from '../../context/AuthContext';
@@ -9,6 +9,11 @@ import { notifyStoreBasketUpdated } from '../../lib/storeEvents';
 import type { Product } from '../../types';
 import { Package, Heart, ShoppingBag, Zap } from 'lucide-react';
 import type { StoreOutletContext } from './storeTypes';
+import { storeSellableUnits } from '../../lib/storeInventory';
+
+function isUuid(s: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+}
 
 function lineSizeForDb(sizes: string[], selected: string): string | null {
   if (!sizes.length) return null;
@@ -18,14 +23,23 @@ function lineSizeForDb(sizes: string[], selected: string): string | null {
 export function StoreProductPage() {
   const { productId } = useParams<{ productId: string }>();
   const { tenant, slug } = useOutletContext<StoreOutletContext>();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { hideStockNumbers } = useStoreRole(tenant.id);
   const { toast } = useToast();
   const navigate = useNavigate();
   const [product, setProduct] = useState<Product | null | undefined>(undefined);
+  const [listingQuantity, setListingQuantity] = useState(0);
+  const [listing, setListing] = useState<{
+    user_id: string;
+    margin_amount: number;
+    seller_display_name: string;
+  } | null>(null);
   const [qty, setQty] = useState(1);
   const [selectedSize, setSelectedSize] = useState('');
   const [inWishlist, setInWishlist] = useState(false);
+
+  const resellerParam = searchParams.get('reseller');
 
   const sizeOptions = product?.sizes && product.sizes.length > 0 ? product.sizes : [];
 
@@ -38,14 +52,17 @@ export function StoreProductPage() {
       }
       const { data: link } = await supabase
         .from('tenant_products')
-        .select('product_id')
+        .select('product_id, listing_quantity')
         .eq('tenant_id', tenant.id)
         .eq('product_id', productId)
         .maybeSingle();
       if (!link) {
         if (!cancel) setProduct(null);
+        if (!cancel) setListingQuantity(0);
         return;
       }
+      const lq = Number((link as { listing_quantity?: number }).listing_quantity);
+      if (!cancel) setListingQuantity(Number.isFinite(lq) ? lq : 0);
       const { data: p } = await supabase.from('products').select('*').eq('id', productId).eq('is_active', true).maybeSingle();
       const row = p as Product | null;
       if (!cancel) {
@@ -59,6 +76,29 @@ export function StoreProductPage() {
       cancel = true;
     };
   }, [productId, tenant.id]);
+
+  useEffect(() => {
+    let cancel = false;
+    async function loadListing() {
+      setListing(null);
+      if (!productId || !resellerParam || !isUuid(resellerParam)) return;
+      const { data: row } = await supabase
+        .from('tenant_store_reseller_product_margins')
+        .select('user_id, margin_amount, seller_display_name')
+        .eq('tenant_id', tenant.id)
+        .eq('product_id', productId)
+        .eq('user_id', resellerParam)
+        .maybeSingle();
+      if (cancel) return;
+      const m = row as { user_id: string; margin_amount: number; seller_display_name: string } | null;
+      if (m && Number(m.margin_amount) > 0 && m.seller_display_name?.trim()) setListing(m);
+      else setListing(null);
+    }
+    void loadListing();
+    return () => {
+      cancel = true;
+    };
+  }, [productId, tenant.id, resellerParam]);
 
   useEffect(() => {
     let cancel = false;
@@ -84,14 +124,26 @@ export function StoreProductPage() {
 
   const accent = tenant.primary_color || '#ea580c';
   const lineSize = product ? lineSizeForDb(sizeOptions, selectedSize) : null;
+  const unitPrice = product ? product.price + (listing?.margin_amount ?? 0) : 0;
+  const showResellerListing = !!listing;
+  const storeAvailable = useMemo(
+    () => (product ? storeSellableUnits(listingQuantity, product.stock) : 0),
+    [product, listingQuantity],
+  );
+
+  useEffect(() => {
+    if (storeAvailable < 1) return;
+    setQty((q) => Math.min(Math.max(1, q), storeAvailable));
+  }, [storeAvailable]);
 
   async function addToCart() {
-    if (!user || !product || product.stock <= 0) return;
+    if (!user || !product || storeAvailable <= 0) return;
     if (sizeOptions.length > 0 && !selectedSize) {
       toast('Select a size', 'error');
       return;
     }
-    const q = Math.min(Math.max(1, qty), Math.max(1, product.stock));
+    const q = Math.min(Math.max(1, qty), Math.max(1, storeAvailable));
+    const offeredBy = listing ? listing.user_id : null;
 
     let existingQuery = supabase
       .from('store_cart_items')
@@ -100,11 +152,20 @@ export function StoreProductPage() {
       .eq('user_id', user.id)
       .eq('product_id', product.id);
     existingQuery = lineSize == null ? existingQuery.is('size', null) : existingQuery.eq('size', lineSize);
+    if (offeredBy) existingQuery = existingQuery.eq('offered_by_reseller_id', offeredBy);
+    else existingQuery = existingQuery.is('offered_by_reseller_id', null);
+    existingQuery = existingQuery.is('purchase_intent', null);
+
     const { data: existing } = await existingQuery.maybeSingle();
     const row = existing as { id: string; quantity: number } | null;
     const nextQty = row ? row.quantity + q : q;
-    if (nextQty > product.stock) {
-      toast(hideStockNumbers ? 'Maximum available quantity reached for this item.' : `Only ${product.stock} in stock`, 'error');
+    if (nextQty > storeAvailable) {
+      toast(
+        hideStockNumbers
+          ? 'Maximum available quantity reached for this item.'
+          : `Only ${storeAvailable} available for this store`,
+        'error',
+      );
       return;
     }
     if (row) {
@@ -121,6 +182,8 @@ export function StoreProductPage() {
         product_id: product.id,
         quantity: q,
         size: lineSize,
+        offered_by_reseller_id: offeredBy,
+        purchase_intent: null,
       });
       if (error) toast(error.message, 'error');
       else {
@@ -165,21 +228,21 @@ export function StoreProductPage() {
   }
 
   function buyNow() {
-    if (!product || product.stock <= 0) return;
+    if (!product || storeAvailable <= 0) return;
     if (sizeOptions.length > 0 && !selectedSize) {
       toast('Select a size', 'error');
       return;
     }
-    const q = Math.min(Math.max(1, qty), Math.max(1, product.stock));
+    const q = Math.min(Math.max(1, qty), Math.max(1, storeAvailable));
     const sizeQs = lineSize ? `&size=${encodeURIComponent(lineSize)}` : '';
+    const resellerQs = listing ? `&reseller=${encodeURIComponent(listing.user_id)}` : '';
+    const checkoutQs = `productId=${product.id}&qty=${q}${sizeQs}${resellerQs}`;
     if (!user) {
       toast('Sign in to complete your purchase', 'info');
-      navigate(
-        `/store/${slug}/login?next=${encodeURIComponent(`/store/${slug}/checkout?productId=${product.id}&qty=${q}${sizeQs}`)}`,
-      );
+      navigate(`/store/${slug}/login?next=${encodeURIComponent(`/store/${slug}/checkout?${checkoutQs}`)}`);
       return;
     }
-    navigate(`/store/${slug}/checkout?productId=${product.id}&qty=${q}${sizeQs}`);
+    navigate(`/store/${slug}/checkout?${checkoutQs}`);
   }
 
   if (product === undefined) {
@@ -235,19 +298,31 @@ export function StoreProductPage() {
           <p className="text-xs font-semibold uppercase tracking-wide text-[var(--sf-muted)] mb-2">{product.category}</p>
           <h1 className="text-3xl font-bold text-[var(--sf-fg)] mb-4">{product.name}</h1>
           <div className="flex flex-wrap items-baseline gap-3 mb-6">
-            <span className="text-3xl font-bold text-[var(--sf-fg)]">{formatINR(product.price)}</span>
-            {product.mrp > product.price ? (
+            <span className="text-3xl font-bold text-[var(--sf-fg)]">{formatINR(unitPrice)}</span>
+            {showResellerListing ? (
+              <span className="text-sm text-[var(--sf-muted)]">Store base {formatINR(product.price)} + margin</span>
+            ) : product.mrp > product.price ? (
               <span className="text-lg text-[var(--sf-muted)] line-through">{formatINR(product.mrp)}</span>
             ) : null}
           </div>
+          {showResellerListing ? (
+            <p className="text-sm font-semibold mb-4 -mt-2" style={{ color: accent }}>
+              Sold by {listing!.seller_display_name}
+            </p>
+          ) : null}
           <p className="text-[var(--sf-muted)] leading-relaxed mb-8 whitespace-pre-line">{product.description}</p>
+          {showResellerListing ? (
+            <p className="text-sm text-[var(--sf-fg)] mb-6 rounded-xl border border-[var(--sf-border)] bg-stone-50 p-3">
+              This listing is offered by an independent reseller. You pay the price above; the store fulfills the product.
+            </p>
+          ) : null}
 
-          {product.stock <= 0 ? (
+          {storeAvailable <= 0 ? (
             <p className="text-red-600 font-medium mb-6">Currently out of stock</p>
           ) : hideStockNumbers ? (
             <p className="text-sm text-green-700 font-medium mb-6">In stock</p>
           ) : (
-            <p className="text-sm text-[var(--sf-muted)] mb-6">{product.stock} in stock</p>
+            <p className="text-sm text-[var(--sf-muted)] mb-6">{storeAvailable} available for this store</p>
           )}
 
           {sizeOptions.length > 0 ? (
@@ -275,10 +350,17 @@ export function StoreProductPage() {
               id="qty"
               type="number"
               min={1}
-              max={Math.max(1, product.stock)}
+              max={Math.max(1, storeAvailable)}
               value={qty}
-              disabled={product.stock <= 0}
-              onChange={(e) => setQty(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              disabled={storeAvailable <= 0}
+              onChange={(e) =>
+                setQty(
+                  Math.min(
+                    storeAvailable > 0 ? storeAvailable : 1,
+                    Math.max(1, parseInt(e.target.value, 10) || 1),
+                  ),
+                )
+              }
               className="w-20 px-3 py-2 rounded-xl border border-[var(--sf-border)] bg-[var(--sf-surface)] text-center font-medium"
             />
           </div>
@@ -286,8 +368,8 @@ export function StoreProductPage() {
           <div className="flex flex-col sm:flex-row gap-3">
             <button
               type="button"
-              disabled={product.stock <= 0}
-              onClick={buyNow}
+              disabled={storeAvailable <= 0}
+              onClick={() => buyNow()}
               className="inline-flex flex-1 items-center justify-center gap-2 px-5 py-3.5 rounded-xl text-white font-semibold shadow-md disabled:opacity-45 hover:opacity-95 transition-opacity"
               style={{ backgroundColor: accent }}
             >
@@ -296,11 +378,14 @@ export function StoreProductPage() {
             </button>
             <button
               type="button"
-              disabled={product.stock <= 0}
+              disabled={storeAvailable <= 0}
               onClick={() => {
                 if (!user) {
                   toast('Sign in to add items to your cart', 'info');
-                  navigate(`/store/${slug}/login?next=${encodeURIComponent(`/store/${slug}/product/${product.id}`)}`);
+                  const productPath = `/store/${slug}/product/${product.id}${
+                    listing ? `?reseller=${encodeURIComponent(listing.user_id)}` : ''
+                  }`;
+                  navigate(`/store/${slug}/login?next=${encodeURIComponent(productPath)}`);
                   return;
                 }
                 void addToCart();

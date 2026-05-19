@@ -133,6 +133,13 @@ export function StoreSignupPage() {
               ))}
             </div>
           </div>
+          <p className="text-xs text-[var(--sf-muted)] leading-relaxed">
+            By creating an account you agree to this store&apos;s{' '}
+            <Link to={`/store/${slug}/terms`} className="font-semibold hover:underline" style={{ color: accent }}>
+              Terms &amp; conditions
+            </Link>
+            .
+          </p>
           <button
             type="submit"
             disabled={loading}

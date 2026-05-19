@@ -58,15 +58,15 @@ const plans = [
 export function PricingPage() {
   return (
     <div className="min-h-screen bg-white">
-      <nav className="fixed top-0 inset-x-0 z-50 bg-white/80 backdrop-blur-xl border-b border-navy-100">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <nav className="fixed top-0 inset-x-0 z-[100] bg-white/80 backdrop-blur-xl border-b border-navy-100">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between relative z-10">
           <Link to="/" className="flex items-center gap-2">
             <div className="w-8 h-8 bg-accent-500 rounded-lg flex items-center justify-center">
               <Crown className="w-5 h-5 text-white" />
             </div>
             <span className="text-xl font-bold text-navy-900">UCMP</span>
           </Link>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 relative z-10">
             <Link to="/login" className="text-sm font-medium text-navy-600 hover:text-navy-900 px-4 py-2">Sign In</Link>
             <Link to="/signup" className="text-sm font-semibold text-white bg-accent-500 hover:bg-accent-600 px-5 py-2.5 rounded-xl transition-all">Get Started</Link>
           </div>

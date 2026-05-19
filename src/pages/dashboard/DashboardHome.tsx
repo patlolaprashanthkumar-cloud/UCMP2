@@ -41,9 +41,9 @@ function getStatConfigForRole(role: Role, wallet: Wallet | null, counts: Record<
       { title: 'Products Listed', value: String(counts.products || 0), icon: <Package className="w-5 h-5" />, color: 'navy' },
     ],
     VENDOR: [
-      { title: 'Total Sales', value: formatINR(Number(counts.revenue) || 0), icon: <DollarSign className="w-5 h-5" />, color: 'accent', to: '/dashboard/orders' },
+      { title: 'Total Sales (B2B)', value: formatINR(Number(counts.revenue) || 0), icon: <DollarSign className="w-5 h-5" />, color: 'accent', to: '/dashboard/orders' },
       { title: 'Products', value: String(counts.products || 0), icon: <Package className="w-5 h-5" />, color: 'success', to: '/dashboard/my-products' },
-      { title: 'Pending Orders', value: String(counts.pendingOrders || 0), icon: <ClipboardList className="w-5 h-5" />, color: 'blue', to: '/dashboard/orders' },
+      { title: 'Pending Orders (B2B)', value: String(counts.pendingOrders || 0), icon: <ClipboardList className="w-5 h-5" />, color: 'blue', to: '/dashboard/orders' },
       { title: 'Stock Alerts', value: String(counts.stockAlerts || 0), icon: <AlertTriangle className="w-5 h-5" />, color: 'navy', to: '/dashboard/my-products' },
     ],
     SAAS_OWNER: [
@@ -97,7 +97,7 @@ export function DashboardHome() {
         counts.monthEarnings = monthTx?.reduce((s, t) => s + t.amount, 0) || 0;
       }
 
-      if (user.role === 'RESELLER' || user.role === 'VENDOR' || user.role === 'SAAS_OWNER') {
+      if (user.role === 'RESELLER' || user.role === 'SAAS_OWNER') {
         const { count: orderCount } = await supabase.from('orders').select('*', { count: 'exact', head: true });
         counts.orders = orderCount || 0;
       }
@@ -141,7 +141,11 @@ export function DashboardHome() {
         if (tenant) {
           const { count: memberCount } = await supabase.from('tenant_members').select('*', { count: 'exact', head: true }).eq('tenant_id', tenant.id);
           counts.activeUsers = memberCount || 0;
-          const { data: tor } = await supabase.from('orders').select('total_amount').eq('tenant_id', tenant.id);
+          const { data: tor } = await supabase
+            .from('orders')
+            .select('total_amount')
+            .eq('tenant_id', tenant.id)
+            .neq('order_kind', 'catalog_procurement');
           counts.revenue = tor?.reduce((s, o) => s + Number(o.total_amount), 0) || 0;
           const { count: skuCount } = await supabase.from('tenant_products').select('*', { count: 'exact', head: true }).eq('tenant_id', tenant.id);
           counts.catalogCount = skuCount || 0;
@@ -153,6 +157,13 @@ export function DashboardHome() {
       let recentQ = supabase.from('orders').select('*, product:products(name)').order('created_at', { ascending: false }).limit(5);
       if (user.role === 'CUSTOMER') {
         recentQ = recentQ.eq('buyer_id', user.id);
+      } else if (user.role === 'VENDOR') {
+        recentQ = supabase
+          .from('orders')
+          .select('*, product:products!inner(name)')
+          .eq('product.vendor_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(5);
       }
       const { data: recentOrders } = await recentQ;
       setActivity(recentOrders || []);

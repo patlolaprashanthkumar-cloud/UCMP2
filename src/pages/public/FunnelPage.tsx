@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { Crown, ArrowRight, Calculator, TrendingUp, Shield, Zap, Users, Store, Share2 } from 'lucide-react';
 import { formatINR } from '../../lib/format';
 
@@ -59,9 +59,20 @@ const icons: Record<string, React.ReactNode> = {
   saas: <Store className="w-6 h-6" />,
 };
 
+const FUNNEL_BY_PATH: Record<string, keyof typeof funnelData> = {
+  '/affiliate-landing': 'affiliate',
+  '/reseller-landing': 'reseller',
+  '/saas-landing': 'saas',
+};
+
 export function FunnelPage() {
   const { type } = useParams<{ type: string }>();
-  const data = funnelData[type || 'affiliate'] || funnelData.affiliate;
+  const { pathname } = useLocation();
+  const pathKey = FUNNEL_BY_PATH[pathname];
+  const paramKey =
+    type && Object.prototype.hasOwnProperty.call(funnelData, type) ? (type as keyof typeof funnelData) : null;
+  const funnelKey = paramKey ?? pathKey ?? 'affiliate';
+  const data = funnelData[funnelKey];
   const [calcValue, setCalcValue] = useState(10);
 
   const dailyIncome = calcValue * data.calcRate;
@@ -70,15 +81,18 @@ export function FunnelPage() {
 
   return (
     <div className="min-h-screen bg-white">
-      <nav className="fixed top-0 inset-x-0 z-50 bg-white/80 backdrop-blur-xl border-b border-navy-100">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <nav className="fixed top-0 inset-x-0 z-[100] bg-white/80 backdrop-blur-xl border-b border-navy-100">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between relative z-10">
           <Link to="/" className="flex items-center gap-2">
             <div className="w-8 h-8 bg-accent-500 rounded-lg flex items-center justify-center">
               <Crown className="w-5 h-5 text-white" />
             </div>
             <span className="text-xl font-bold text-navy-900">UCMP</span>
           </Link>
-          <Link to="/signup" className="text-sm font-semibold text-white bg-accent-500 hover:bg-accent-600 px-5 py-2.5 rounded-xl transition-all">
+          <Link
+            to={`/signup?role=${data.role}`}
+            className="text-sm font-semibold text-white bg-accent-500 hover:bg-accent-600 px-5 py-2.5 rounded-xl transition-all relative z-10"
+          >
             Join Now
           </Link>
         </div>
@@ -88,7 +102,7 @@ export function FunnelPage() {
       <section className="pt-32 pb-16 px-4 bg-gradient-to-b from-navy-900 to-navy-800">
         <div className="max-w-4xl mx-auto text-center">
           <div className="w-16 h-16 bg-accent-500/20 rounded-2xl flex items-center justify-center text-accent-400 mx-auto mb-6">
-            {icons[type || 'affiliate']}
+            {icons[funnelKey]}
           </div>
           <h1 className="text-3xl sm:text-5xl font-bold text-white mb-4 leading-tight">{data.headline}</h1>
           <p className="text-lg text-navy-300 max-w-2xl mx-auto mb-8">{data.subheadline}</p>

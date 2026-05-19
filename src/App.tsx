@@ -7,6 +7,7 @@ import { FunnelPage } from './pages/public/FunnelPage';
 import { LeaderboardPage } from './pages/public/LeaderboardPage';
 import { LoginPage } from './pages/auth/LoginPage';
 import { SignupPage } from './pages/auth/SignupPage';
+import { LegacyRegisterRedirect } from './pages/auth/LegacyRegisterRedirect';
 import { DashboardHome } from './pages/dashboard/DashboardHome';
 import { PortalProfilePage } from './pages/dashboard/PortalProfilePage';
 import { VendorProducts } from './pages/dashboard/VendorProducts';
@@ -16,13 +17,14 @@ import { KYCPage } from './pages/dashboard/KYCPage';
 import { ReferralsPage } from './pages/dashboard/ReferralsPage';
 import { ChallengesPage } from './pages/dashboard/ChallengesPage';
 import { SaasDashboard } from './pages/dashboard/SaasDashboard';
+import { SaasVendorKYC } from './pages/dashboard/SaasVendorKYC';
 import { AdminUsers } from './pages/dashboard/admin/AdminUsers';
-import { AdminCommissions } from './pages/dashboard/admin/AdminCommissions';
 import { AdminKYC } from './pages/dashboard/admin/AdminKYC';
 import { AdminWithdrawals } from './pages/dashboard/admin/AdminWithdrawals';
 import { AdminTenants } from './pages/dashboard/admin/AdminTenants';
 import { AdminAnalytics } from './pages/dashboard/admin/AdminAnalytics';
 import { AdminBilling } from './pages/dashboard/admin/AdminBilling';
+import { AdminOrders } from './pages/dashboard/admin/AdminOrders';
 import { ProductsPage } from './pages/dashboard/ProductsPage';
 import { StoreLayout } from './pages/store/StoreLayout';
 import { StoreCatalogPage } from './pages/store/StoreCatalogPage';
@@ -33,6 +35,12 @@ import { StoreCheckoutPage } from './pages/store/StoreCheckoutPage';
 import { StoreLoginPage } from './pages/store/StoreLoginPage';
 import { StoreSignupPage } from './pages/store/StoreSignupPage';
 import { StoreAccountPage } from './pages/store/StoreAccountPage';
+import { StoreAboutPage } from './pages/store/StoreAboutPage';
+import { StoreTermsPage } from './pages/store/StoreTermsPage';
+import { BuyProductRedirect } from './pages/public/BuyProductRedirect';
+import { PublicLegalPage } from './pages/public/PublicLegalPage';
+import { PublicHelpPage } from './pages/public/PublicHelpPage';
+import { PublicApiDocsPage } from './pages/public/PublicApiDocsPage';
 
 function AuthRedirect({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -52,12 +60,22 @@ export default function App() {
       <Route path="/saas-landing" element={<FunnelPage />} />
       <Route path="/join" element={<Navigate to="/signup" replace />} />
 
+      <Route path="/register" element={<LegacyRegisterRedirect />} />
+      <Route path="/buy/:productId" element={<BuyProductRedirect />} />
+      <Route path="/privacy" element={<PublicLegalPage doc="privacy" />} />
+      <Route path="/terms" element={<PublicLegalPage doc="terms" />} />
+      <Route path="/refunds" element={<PublicLegalPage doc="refunds" />} />
+      <Route path="/help" element={<PublicHelpPage />} />
+      <Route path="/docs" element={<PublicApiDocsPage />} />
+
       <Route path="/store/:slug" element={<StoreLayout />}>
         <Route index element={<StoreCatalogPage />} />
         <Route path="product/:productId" element={<StoreProductPage />} />
         <Route path="cart" element={<StoreCartPage />} />
         <Route path="wishlist" element={<StoreWishlistPage />} />
         <Route path="checkout" element={<StoreCheckoutPage />} />
+        <Route path="about" element={<StoreAboutPage />} />
+        <Route path="terms" element={<StoreTermsPage />} />
         <Route path="login" element={<StoreLoginPage />} />
         <Route path="signup" element={<StoreSignupPage />} />
         <Route path="account" element={<StoreAccountPage />} />
@@ -77,8 +95,9 @@ export default function App() {
         <Route path="referrals" element={<ReferralsPage />} />
         <Route path="challenges" element={<ChallengesPage />} />
         <Route path="saas" element={<SaasDashboard />} />
+        <Route path="vendor-kyc" element={<SaasVendorKYC />} />
         <Route path="admin/users" element={<AdminUsers />} />
-        <Route path="admin/commissions" element={<AdminCommissions />} />
+        <Route path="admin/orders" element={<AdminOrders />} />
         <Route path="admin/kyc" element={<AdminKYC />} />
         <Route path="admin/withdrawals" element={<AdminWithdrawals />} />
         <Route path="admin/tenants" element={<AdminTenants />} />

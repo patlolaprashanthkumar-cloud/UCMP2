@@ -71,6 +71,7 @@ export function ProductsPage() {
       status: 'confirmed',
       payment_timing: 'prepaid',
       payment_status: 'paid',
+      order_kind: 'storefront',
       ...(row?.tenant_id ? { tenant_id: row.tenant_id } : {}),
     });
     if (error) {
@@ -145,20 +146,38 @@ export function ProductsPage() {
                 )}
               </div>
               <div className="flex gap-2 mt-3">
-                <button onClick={() => handleOrder(product)} className="btn-primary text-sm flex-1 py-2">
-                  <ShoppingCart className="w-4 h-4" />
-                  Buy Now
-                </button>
-                <button
-                  onClick={() => {
-                    const link = `${window.location.origin}/buy/${product.id}?ref=${user?.id}`;
-                    navigator.clipboard.writeText(link);
-                    toast('Link copied!');
-                  }}
-                  className="btn-outline text-sm py-2 px-3"
-                >
-                  <ExternalLink className="w-4 h-4" />
-                </button>
+                {user?.role !== 'VENDOR' ? (
+                  <>
+                    <button onClick={() => handleOrder(product)} className="btn-primary text-sm flex-1 py-2">
+                      <ShoppingCart className="w-4 h-4" />
+                      Buy Now
+                    </button>
+                    <button
+                      onClick={() => {
+                        const link = `${window.location.origin}/buy/${product.id}?ref=${user?.id}`;
+                        navigator.clipboard.writeText(link);
+                        toast('Link copied!');
+                      }}
+                      className="btn-outline text-sm py-2 px-3 shrink-0"
+                      title="Copy share link"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => {
+                      const link = `${window.location.origin}/buy/${product.id}?ref=${user?.id}`;
+                      navigator.clipboard.writeText(link);
+                      toast('Link copied!');
+                    }}
+                    className="btn-outline text-sm w-full py-2 px-3 inline-flex items-center justify-center gap-2"
+                    title="Copy share link"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                    Copy link
+                  </button>
+                )}
               </div>
             </div>
           ))}

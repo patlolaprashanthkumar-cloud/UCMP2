@@ -3,12 +3,24 @@ import { Link, useOutletContext } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { formatINR, formatDate } from '../../lib/format';
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
 import { useStoreRole } from '../../hooks/useStoreRole';
 import type { Order, StoreDeliveryAddress, TenantStorePartnerSettings } from '../../types';
-import { Package, LogOut, User, MapPin, ClipboardList, Link2, IndianRupee, FileText, Share2 } from 'lucide-react';
+import { Package, LogOut, User, MapPin, ClipboardList, Link2, IndianRupee, FileText, Share2, ExternalLink } from 'lucide-react';
 import type { StoreOutletContext } from './storeTypes';
 
 type TabId = 'orders' | 'profile' | 'addresses' | 'affiliate' | 'reseller';
+
+/** Store catalog rows for affiliate/reseller tools (from tenant_products → products). */
+type StoreAccountCatalogProduct = {
+  id: string;
+  name: string;
+  price: number;
+  category: string;
+  images: string[];
+  description: string;
+  mrp: number;
+};
 
 const emptyAddressForm = {
   label: 'Home',
@@ -26,6 +38,7 @@ const emptyAddressForm = {
 export function StoreAccountPage() {
   const { tenant, slug } = useOutletContext<StoreOutletContext>();
   const { user, signOut, refreshProfile } = useAuth();
+  const { toast } = useToast();
   const { storeRole, loading: roleLoading } = useStoreRole(tenant.id);
 
   const [tab, setTab] = useState<TabId>('orders');
@@ -41,7 +54,7 @@ export function StoreAccountPage() {
   const [editingAddrId, setEditingAddrId] = useState<string | null>(null);
   const [addrSaving, setAddrSaving] = useState(false);
 
-  const [storeProducts, setStoreProducts] = useState<{ id: string; name: string; price: number; category: string }[]>([]);
+  const [storeProducts, setStoreProducts] = useState<StoreAccountCatalogProduct[]>([]);
   const [affiliateOrders, setAffiliateOrders] = useState<{ buyer_id: string; total_amount: number }[]>([]);
   const [resellerOrders, setResellerOrders] = useState<{ total_amount: number }[]>([]);
   const [partner, setPartner] = useState<TenantStorePartnerSettings | null>(null);
@@ -107,7 +120,7 @@ export function StoreAccountPage() {
     const [{ data: tps }, { data: pRow }, { data: marginRows }] = await Promise.all([
       supabase
         .from('tenant_products')
-        .select('product:products(id, name, price, category, is_active)')
+        .select('product:products(id, name, price, category, is_active, images, description, mrp)')
         .eq('tenant_id', tenant.id),
       supabase
         .from('tenant_store_partner_settings')
@@ -118,9 +131,18 @@ export function StoreAccountPage() {
       marginQuery,
     ]);
 
-    const prods: { id: string; name: string; price: number; category: string }[] = [];
+    const prods: StoreAccountCatalogProduct[] = [];
     const raw = (tps || []) as unknown as {
-      product: { id: string; name: string; price: number; category: string | null; is_active?: boolean } | null;
+      product: {
+        id: string;
+        name: string;
+        price: number;
+        category: string | null;
+        is_active?: boolean;
+        images?: string[] | null;
+        description?: string | null;
+        mrp?: number | null;
+      } | null;
     }[];
     for (const row of raw) {
       const pr = row.product;
@@ -130,6 +152,9 @@ export function StoreAccountPage() {
           name: pr.name,
           price: Number(pr.price) || 0,
           category: pr.category || '',
+          images: Array.isArray(pr.images) ? pr.images : [],
+          description: (pr.description ?? '').trim(),
+          mrp: Number(pr.mrp) || 0,
         });
       }
     }
@@ -216,13 +241,28 @@ export function StoreAccountPage() {
   async function saveProfile() {
     if (!user) return;
     setProfileSaving(true);
-    const { error } = await supabase.from('profiles').update({ name: nameDraft.trim() || user.name }).eq('id', user.id);
+    const nextName = nameDraft.trim() || user.name;
+    const { error } = await supabase.from('profiles').update({ name: nextName }).eq('id', user.id);
     setProfileSaving(false);
     if (error) {
       window.alert(error.message);
       return;
     }
     await refreshProfile();
+    if (storeRole === 'RESELLER') {
+      const displayName = (typeof nextName === 'string' ? nextName : '').trim() || 'Reseller';
+      const { error: marginNameErr } = await supabase
+        .from('tenant_store_reseller_product_margins')
+        .update({ seller_display_name: displayName })
+        .eq('tenant_id', tenant.id)
+        .eq('user_id', user.id);
+      if (marginNameErr) {
+        toast('Profile saved, but storefront name sync failed: ' + marginNameErr.message, 'error');
+        return;
+      }
+      await loadPartnerExtras();
+    }
+    toast('Profile saved.', 'success');
   }
 
   function startNewAddress() {
@@ -324,12 +364,25 @@ export function StoreAccountPage() {
 
   async function saveResellerProductMargins() {
     if (!user || storeProducts.length === 0) return;
-    const rows: { tenant_id: string; user_id: string; product_id: string; margin_amount: number }[] = [];
+    const sellerName = (user.name ?? '').trim() || 'Reseller';
+    const rows: {
+      tenant_id: string;
+      user_id: string;
+      product_id: string;
+      margin_amount: number;
+      seller_display_name: string;
+    }[] = [];
     for (const p of storeProducts) {
       const rawVal = resellerMarginDrafts[p.id] ?? '0';
       const n = Number.parseFloat(String(rawVal));
       const margin = Number.isFinite(n) ? Math.min(100_000_000, Math.max(0, n)) : 0;
-      rows.push({ tenant_id: tenant.id, user_id: user.id, product_id: p.id, margin_amount: margin });
+      rows.push({
+        tenant_id: tenant.id,
+        user_id: user.id,
+        product_id: p.id,
+        margin_amount: margin,
+        seller_display_name: sellerName,
+      });
     }
     setPartnerSaving(true);
     const { error } = await supabase.from('tenant_store_reseller_product_margins').upsert(rows, {
@@ -348,8 +401,18 @@ export function StoreAccountPage() {
     const margin = Number.parseFloat(resellerMarginDrafts[p.id] ?? '0') || 0;
     const selling = p.price + margin;
     const link = `${origin}/store/${slug}/product/${p.id}?reseller=${user.id}`;
-    const msg = encodeURIComponent(`${p.name} — ${formatINR(selling)}. Order: ${link}`);
+    const msg = encodeURIComponent(`${p.name} — ${formatINR(selling)}. Order here: ${link}`);
     window.open(`https://wa.me/?text=${msg}`, '_blank');
+  }
+
+  function copyResellerCustomerLink(p: { id: string; name: string; price: number }) {
+    if (!user) return;
+    const margin = Number.parseFloat(resellerMarginDrafts[p.id] ?? '0') || 0;
+    const selling = p.price + margin;
+    const link = `${origin}/store/${slug}/product/${p.id}?reseller=${user.id}`;
+    const text = `${p.name} — ${formatINR(selling)}\n${link}`;
+    void navigator.clipboard.writeText(text);
+    toast('Copied product, your price, and link (with ?reseller=).', 'success');
   }
 
   async function acknowledgeRequirements() {
@@ -645,25 +708,66 @@ export function StoreAccountPage() {
             <p className="text-xs text-[var(--sf-muted)] mb-4">
               Share a product URL with <code className="bg-stone-100 px-1 rounded">?ref=your-id</code> so orders can attribute to you when buyers use that link in this browser session.
             </p>
-            <ul className="space-y-2 max-h-64 overflow-y-auto">
+            <div className="grid sm:grid-cols-2 gap-4 max-h-[min(32rem,80vh)] overflow-y-auto pr-1">
               {storeProducts.map((p) => {
                 const url = `${origin}/store/${slug}/product/${p.id}?ref=${user.id}`;
+                const thumb = p.images[0];
+                const showMrp = p.mrp > p.price;
                 return (
-                  <li key={p.id} className="flex flex-col sm:flex-row sm:items-center gap-2 text-sm border border-[var(--sf-border)] rounded-lg p-3">
-                    <span className="font-medium text-[var(--sf-fg)] flex-1 min-w-0">{p.name}</span>
-                    <button
-                      type="button"
-                      className="shrink-0 text-xs font-semibold px-2 py-1 rounded border border-[var(--sf-border)] hover:bg-stone-50"
-                      onClick={() => {
-                        void navigator.clipboard.writeText(url);
-                      }}
-                    >
-                      Copy link
-                    </button>
-                  </li>
+                  <div
+                    key={p.id}
+                    className="flex gap-3 text-sm border border-[var(--sf-border)] rounded-xl p-3 bg-[var(--sf-bg)]"
+                  >
+                    <div className="w-20 h-20 shrink-0 rounded-lg overflow-hidden bg-stone-100 flex items-center justify-center border border-[var(--sf-border)]">
+                      {thumb ? (
+                        <img src={thumb} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <Package className="w-8 h-8 text-[var(--sf-muted)]" aria-hidden />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1 flex flex-col gap-1">
+                      {p.category ? (
+                        <p className="text-xs font-semibold uppercase tracking-wide text-[var(--sf-muted)] truncate">
+                          {p.category}
+                        </p>
+                      ) : null}
+                      <p className="font-semibold text-[var(--sf-fg)] leading-snug">{p.name}</p>
+                      <p className="text-[var(--sf-fg)]">
+                        <span className="font-semibold">{formatINR(p.price)}</span>
+                        {showMrp ? (
+                          <span className="text-[var(--sf-muted)] line-through ml-2 text-xs">{formatINR(p.mrp)}</span>
+                        ) : null}
+                      </p>
+                      {p.description ? (
+                        <p className="text-xs text-[var(--sf-muted)] line-clamp-2">{p.description}</p>
+                      ) : null}
+                      <div className="flex flex-wrap items-center gap-2 pt-1 mt-auto">
+                        <button
+                          type="button"
+                          className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-[var(--sf-border)] hover:bg-stone-50"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(url).then(
+                              () => toast('Link copied', 'success'),
+                              () => toast('Could not copy link', 'error'),
+                            );
+                          }}
+                        >
+                          Copy link
+                        </button>
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-[var(--sf-border)] hover:bg-stone-50 text-[var(--sf-fg)]"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" /> Open
+                        </a>
+                      </div>
+                    </div>
+                  </div>
                 );
               })}
-            </ul>
+            </div>
             {storeProducts.length === 0 ? <p className="text-sm text-[var(--sf-muted)]">No products in this store yet.</p> : null}
           </div>
 
@@ -701,10 +805,23 @@ export function StoreAccountPage() {
       {tab === 'reseller' && storeRole === 'RESELLER' && (
         <div className="space-y-6">
           <div className="rounded-2xl border border-[var(--sf-border)] bg-[var(--sf-surface)] p-6 space-y-4">
-            <h2 className="text-lg font-semibold text-[var(--sf-fg)]">Your product margins</h2>
+            <h2 className="text-lg font-semibold text-[var(--sf-fg)]">Your listings on this store</h2>
             <p className="text-sm text-[var(--sf-muted)]">
-              Set a fixed margin per catalog item. Your suggested selling price is <strong>base price + margin</strong> (same currency as the store). Share the product link with{' '}
-              <code className="bg-stone-100 px-1 rounded">?reseller=your-id</code> so checkouts can attribute to you when buyers shop from that link.
+              <strong>1.</strong> Set a margin on each product (your price = store base + margin).{' '}
+              <strong>2.</strong> Click <strong>Save all margins</strong>.{' '}
+              <strong>3.</strong> Use <strong>Copy customer link</strong> or WhatsApp — the link includes{' '}
+              <code className="bg-stone-100 px-1 rounded">?reseller=your-id</code> so buyers see{' '}
+              <strong>your price</strong> and <strong>Sold by {(user.name ?? '').trim() || 'your profile name'}</strong> on the storefront.
+            </p>
+            <div className="rounded-xl border border-dashed border-[var(--sf-border)] bg-stone-50 px-4 py-3 text-sm text-[var(--sf-fg)]">
+              <span className="font-semibold">Storefront preview:</span>{' '}
+              <span style={{ color: accent }}>
+                Sold by {(user.name ?? '').trim() || '… save your name in Profile'}
+              </span>
+              <span className="text-[var(--sf-muted)]"> — update Profile to refresh this label everywhere.</span>
+            </div>
+            <p className="text-sm text-[var(--sf-muted)]">
+              Your suggested selling price is <strong>base price + margin</strong> (store currency). Only products with margin &gt; 0 appear as reseller listings after save.
             </p>
             {storeProducts.length === 0 ? (
               <p className="text-sm text-[var(--sf-muted)]">No products in this store yet.</p>
@@ -717,25 +834,38 @@ export function StoreAccountPage() {
                     const margin = Number.isFinite(marginNum) ? Math.max(0, marginNum) : 0;
                     const selling = p.price + margin;
                     const rid = user?.id ?? '';
-                    const storeLink = rid ? `${origin}/store/${slug}/product/${p.id}?reseller=${rid}` : `${origin}/store/${slug}/product/${p.id}`;
+                    const resellerProductPath = rid
+                      ? `/store/${slug}/product/${p.id}?reseller=${rid}`
+                      : `/store/${slug}/product/${p.id}`;
                     return (
                       <li
                         key={p.id}
                         className="border border-[var(--sf-border)] rounded-xl p-4 space-y-3 text-sm bg-[var(--sf-bg)]"
                       >
-                        <div className="flex flex-col gap-1 min-w-0">
-                          {p.category ? (
-                            <p className="text-xs font-semibold uppercase tracking-wide text-[var(--sf-muted)]">{p.category}</p>
-                          ) : null}
-                          <p className="font-semibold text-[var(--sf-fg)]">{p.name}</p>
-                          <p className="text-[var(--sf-muted)]">
-                            Base: <span className="text-[var(--sf-fg)] font-medium">{formatINR(p.price)}</span>
-                            {' · '}
-                            Your price:{' '}
-                            <span className="font-semibold" style={{ color: accent }}>
-                              {formatINR(selling)}
-                            </span>
-                          </p>
+                        <div className="flex gap-3 min-w-0">
+                          <div className="w-14 h-14 shrink-0 rounded-lg overflow-hidden bg-stone-100 flex items-center justify-center border border-[var(--sf-border)]">
+                            {p.images[0] ? (
+                              <img src={p.images[0]} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              <Package className="w-6 h-6 text-[var(--sf-muted)]" aria-hidden />
+                            )}
+                          </div>
+                          <div className="flex flex-col gap-1 min-w-0 flex-1">
+                            {p.category ? (
+                              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--sf-muted)]">
+                                {p.category}
+                              </p>
+                            ) : null}
+                            <p className="font-semibold text-[var(--sf-fg)]">{p.name}</p>
+                            <p className="text-[var(--sf-muted)]">
+                              Base: <span className="text-[var(--sf-fg)] font-medium">{formatINR(p.price)}</span>
+                              {' · '}
+                              Your price:{' '}
+                              <span className="font-semibold" style={{ color: accent }}>
+                                {formatINR(selling)}
+                              </span>
+                            </p>
+                          </div>
                         </div>
                         <div className="flex flex-wrap items-end gap-3">
                           <div>
@@ -759,9 +889,9 @@ export function StoreAccountPage() {
                           <button
                             type="button"
                             className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-[var(--sf-border)] hover:bg-stone-50"
-                            onClick={() => void navigator.clipboard.writeText(storeLink)}
+                            onClick={() => copyResellerCustomerLink(p)}
                           >
-                            Copy store link
+                            Copy customer link
                           </button>
                           <button
                             type="button"
@@ -771,10 +901,10 @@ export function StoreAccountPage() {
                             <Share2 className="w-3.5 h-3.5" /> WhatsApp
                           </button>
                           <Link
-                            to={`/store/${slug}/product/${p.id}`}
+                            to={resellerProductPath}
                             className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-[var(--sf-border)] hover:bg-stone-50"
                           >
-                            View in store
+                            View your listing
                           </Link>
                         </div>
                       </li>
