@@ -8,6 +8,8 @@ import { formatINR } from '../../lib/format';
 import { Pagination } from '../../components/ui/Pagination';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { TableSkeleton } from '../../components/ui/LoadingSkeleton';
+import { invokeEdgeFunction } from '../../lib/edgeFunctions';
+import { loadRazorpayScript, openRazorpayModal } from '../../lib/razorpayCheckout';
 import type { Product } from '../../types';
 
 const categories = ['All', 'Electronics', 'Fashion', 'Home', 'Health', 'Food', 'Books', 'Other'];
@@ -63,21 +65,63 @@ export function ProductsPage() {
       .limit(1)
       .maybeSingle();
     const row: { tenant_id?: string } | null = linkRow;
-    const { error } = await supabase.from('orders').insert({
-      buyer_id: user.id,
-      product_id: product.id,
-      quantity: 1,
-      total_amount: product.price,
-      status: 'confirmed',
-      payment_timing: 'prepaid',
-      payment_status: 'paid',
-      order_kind: 'storefront',
-      ...(row?.tenant_id ? { tenant_id: row.tenant_id } : {}),
-    });
-    if (error) {
-      toast(error.message, 'error');
-    } else {
-      toast('Order placed successfully!');
+    const tenantId = row?.tenant_id;
+    if (!tenantId) {
+      toast('This product is not available on a tenant storefront.', 'error');
+      return;
+    }
+    const { data: trow } = await supabase
+      .from('saas_tenants')
+      .select('store_name')
+      .eq('id', tenantId)
+      .maybeSingle();
+    const storeName = (trow as { store_name?: string } | null)?.store_name || 'Store';
+
+    try {
+      const idempotencyKey = crypto.randomUUID();
+      const created = await invokeEdgeFunction<{
+        session_id: string;
+        razorpay_order_id: string;
+        key_id: string;
+        amount: number;
+      }>('create-razorpay-order', {
+        tenant_id: tenantId,
+        idempotency_key: idempotencyKey,
+        lines: [
+          {
+            product_id: product.id,
+            quantity: 1,
+            size: null,
+            offered_by_reseller_id: null,
+            purchase_intent: null,
+            cart_line_id: null,
+          },
+        ],
+      });
+
+      await loadRazorpayScript();
+      openRazorpayModal({
+        keyId: created.key_id,
+        orderId: created.razorpay_order_id,
+        name: storeName,
+        description: `Pay ${formatINR(created.amount / 100)}`,
+        themeColor: '#0f766e',
+        onSuccess: async (resp) => {
+          try {
+            await invokeEdgeFunction('verify-razorpay-payment', {
+              session_id: created.session_id,
+              razorpay_order_id: resp.razorpay_order_id,
+              razorpay_payment_id: resp.razorpay_payment_id,
+              razorpay_signature: resp.razorpay_signature,
+            });
+            toast('Order placed successfully!');
+          } catch (err) {
+            toast(err instanceof Error ? err.message : 'Verification failed', 'error');
+          }
+        },
+      });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not start payment', 'error');
     }
   }
 

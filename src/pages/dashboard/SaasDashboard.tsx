@@ -9,7 +9,17 @@ import { Modal } from '../../components/ui/Modal';
 import { StatCard } from '../../components/ui/StatCard';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { DashboardSkeleton } from '../../components/ui/LoadingSkeleton';
-import type { SaasTenant, TenantMember, Product, TenantProduct, Order, SaasVendorCatalogDue } from '../../types';
+import type {
+  SaasTenant,
+  TenantMember,
+  Product,
+  TenantProduct,
+  Order,
+  SaasVendorCatalogDue,
+  SaasTenantPlatformDue,
+} from '../../types';
+import { invokeEdgeFunction } from '../../lib/edgeFunctions';
+import { loadRazorpayScript, openRazorpayModal } from '../../lib/razorpayCheckout';
 import {
   Store, Crown, Activity, ExternalLink, Palette, Save,
   UserPlus, Trash2, ShoppingCart, DollarSign, Users, ArrowUpRight,
@@ -71,6 +81,8 @@ export function SaasDashboard() {
   const [catalogModal, setCatalogModal] = useState<CatalogModalState>(null);
   const [catalogQtyInput, setCatalogQtyInput] = useState(1);
   const [catalogSubmitting, setCatalogSubmitting] = useState(false);
+  const [platformDues, setPlatformDues] = useState<SaasTenantPlatformDue[]>([]);
+  const [payingDueId, setPayingDueId] = useState<string | null>(null);
 
   const location = useLocation();
 
@@ -115,16 +127,17 @@ export function SaasDashboard() {
 
       const { data: kindRows } = await supabase
         .from('orders')
-        .select('total_amount, order_kind')
+        .select('total_amount, order_kind, payment_status')
         .eq('tenant_id', t.id);
 
       const rows = kindRows || [];
       const storefrontRows = rows.filter((r) => r.order_kind !== 'catalog_procurement');
+      const paidStorefront = storefrontRows.filter((r) => r.payment_status === 'paid');
       const procRows = rows.filter((r) => r.order_kind === 'catalog_procurement');
 
       setStats({
-        orders: storefrontRows.length,
-        revenue: storefrontRows.reduce((s, row) => s + Number(row.total_amount), 0),
+        orders: paidStorefront.length,
+        revenue: paidStorefront.reduce((s, row) => s + Number(row.total_amount), 0),
         procurementOrders: procRows.length,
         procurementRevenue: procRows.reduce((s, row) => s + Number(row.total_amount), 0),
         catalogCount: lines.length,
@@ -160,6 +173,14 @@ export function SaasDashboard() {
         .order('created_at', { ascending: false })
         .limit(100);
       setSaasCatalogDues((duesRows as unknown as SaasVendorCatalogDue[]) || []);
+
+      const { data: platformDueRows } = await supabase
+        .from('saas_tenant_platform_dues')
+        .select('*')
+        .eq('tenant_id', t.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      setPlatformDues((platformDueRows as SaasTenantPlatformDue[]) || []);
     } else {
       setMembers([]);
       setVendorCatalog([]);
@@ -167,6 +188,7 @@ export function SaasDashboard() {
       setTenantOrders([]);
       setAffiliateCommissionEdits({});
       setSaasCatalogDues([]);
+      setPlatformDues([]);
       setStats({ orders: 0, revenue: 0, procurementOrders: 0, procurementRevenue: 0, catalogCount: 0 });
     }
     setLoading(false);
@@ -186,9 +208,14 @@ export function SaasDashboard() {
     [tenantOrders],
   );
 
+  const paidStorefrontOrders = useMemo(
+    () => storefrontOrders.filter((o) => o.payment_status === 'paid'),
+    [storefrontOrders],
+  );
+
   const customerSummaries = useMemo(() => {
     const m = new Map<string, { name: string; email: string; orders: number; spent: number }>();
-    for (const o of storefrontOrders) {
+    for (const o of paidStorefrontOrders) {
       const b = o.buyer;
       const prev = m.get(o.buyer_id) ?? {
         name: b?.name || 'Unknown',
@@ -205,21 +232,21 @@ export function SaasDashboard() {
     return Array.from(m.entries())
       .map(([buyerId, v]) => ({ buyerId, ...v }))
       .sort((a, b) => b.spent - a.spent);
-  }, [storefrontOrders]);
+  }, [paidStorefrontOrders]);
 
   const affiliateRows = useMemo(
     () =>
       members
         .filter((mem) => mem.role === 'AFFILIATE')
         .map((mem) => {
-          const attributed = storefrontOrders.filter((o) => o.affiliate_id === mem.user_id);
+          const attributed = paidStorefrontOrders.filter((o) => o.affiliate_id === mem.user_id);
           return {
             member: mem,
             orderCount: attributed.length,
             gmv: attributed.reduce((s, o) => s + Number(o.total_amount), 0),
           };
         }),
-    [members, storefrontOrders],
+    [members, paidStorefrontOrders],
   );
 
   const resellerRows = useMemo(
@@ -227,19 +254,19 @@ export function SaasDashboard() {
       members
         .filter((mem) => mem.role === 'RESELLER')
         .map((mem) => {
-          const attributed = storefrontOrders.filter((o) => o.reseller_id === mem.user_id);
+          const attributed = paidStorefrontOrders.filter((o) => o.reseller_id === mem.user_id);
           return {
             member: mem,
             orderCount: attributed.length,
             gmv: attributed.reduce((s, o) => s + Number(o.total_amount), 0),
           };
         }),
-    [members, storefrontOrders],
+    [members, paidStorefrontOrders],
   );
 
   const affiliateAttributedOrders = useMemo(
-    () => storefrontOrders.filter((o) => o.affiliate_id),
-    [storefrontOrders],
+    () => paidStorefrontOrders.filter((o) => o.affiliate_id),
+    [paidStorefrontOrders],
   );
 
   const saveAffiliateCommission = async (orderId: string) => {
@@ -278,6 +305,49 @@ export function SaasDashboard() {
           : o,
       ),
     );
+  };
+
+  const payPlatformDue = async (due: SaasTenantPlatformDue) => {
+    if (!tenant || !user || due.status !== 'pending') return;
+    setPayingDueId(due.id);
+    try {
+      const created = await invokeEdgeFunction<{
+        session_id: string;
+        razorpay_order_id: string;
+        key_id: string;
+        amount: number;
+      }>('create-razorpay-saas-due-order', { platform_due_id: due.id });
+
+      await loadRazorpayScript();
+      openRazorpayModal({
+        keyId: created.key_id,
+        orderId: created.razorpay_order_id,
+        name: `${tenant.store_name} — platform`,
+        description: `Pay ${formatINR(created.amount / 100)}`,
+        prefillEmail: user.email ?? undefined,
+        themeColor: tenant.primary_color || '#f97316',
+        onSuccess: async (resp) => {
+          try {
+            await invokeEdgeFunction('verify-razorpay-saas-due-payment', {
+              session_id: created.session_id,
+              razorpay_order_id: resp.razorpay_order_id,
+              razorpay_payment_id: resp.razorpay_payment_id,
+              razorpay_signature: resp.razorpay_signature,
+            });
+            toast('Payment recorded.', 'success');
+            await fetchData();
+          } catch (err) {
+            toast(err instanceof Error ? err.message : 'Verification failed', 'error');
+          } finally {
+            setPayingDueId(null);
+          }
+        },
+        onDismiss: () => setPayingDueId(null),
+      });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not start payment', 'error');
+      setPayingDueId(null);
+    }
   };
 
   const createStore = async () => {
@@ -711,8 +781,8 @@ export function SaasDashboard() {
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <StatCard title="Plan" value={tenant.subscription_plan === 'pro' ? 'Pro' : 'Starter'} icon={<Crown className="w-5 h-5" />} color="navy" to="/dashboard/saas#saas-subscription" />
         <StatCard title="Status" value={tenant.is_active ? 'Active' : 'Inactive'} icon={<Activity className="w-5 h-5" />} color={tenant.is_active ? 'success' : 'navy'} to="/dashboard/saas#saas-subscription" />
-        <StatCard title="Storefront orders" value={String(stats.orders)} icon={<ShoppingCart className="w-5 h-5" />} color="blue" to="/dashboard/saas#saas-orders" />
-        <StatCard title="Storefront revenue" value={formatINR(stats.revenue)} icon={<DollarSign className="w-5 h-5" />} color="accent" to="/dashboard/saas#saas-orders" />
+        <StatCard title="Paid storefront orders" value={String(stats.orders)} icon={<ShoppingCart className="w-5 h-5" />} color="blue" to="/dashboard/saas#saas-orders" />
+        <StatCard title="Collected storefront revenue" value={formatINR(stats.revenue)} icon={<DollarSign className="w-5 h-5" />} color="accent" to="/dashboard/saas#saas-orders" />
         <StatCard
           title="Catalog purchases"
           value={formatINR(stats.procurementRevenue)}
@@ -722,6 +792,47 @@ export function SaasDashboard() {
           subtitle={`${stats.procurementOrders} orders`}
         />
         <StatCard title="SKUs in store" value={String(stats.catalogCount)} icon={<Package className="w-5 h-5" />} color="success" to="/dashboard/saas#saas-catalog" />
+      </div>
+
+      <div className="bg-white rounded-xl border border-navy-100 overflow-hidden" id="saas-platform-dues">
+        <div className="px-6 py-4 border-b border-navy-100">
+          <h2 className="text-lg font-semibold text-navy-900 flex items-center gap-2">
+            <DollarSign className="w-5 h-5 text-accent-500" /> Platform invoices
+          </h2>
+          <p className="text-sm text-navy-500 mt-1">
+            Amounts your store owes the platform (created by admin). Pay securely with Razorpay when status is pending.
+          </p>
+        </div>
+        <div className="p-6">
+          {platformDues.length === 0 ? (
+            <p className="text-sm text-navy-500">No platform invoices for this store.</p>
+          ) : (
+            <ul className="divide-y divide-navy-100 border border-navy-100 rounded-lg overflow-hidden">
+              {platformDues.map((d) => (
+                <li key={d.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 bg-white">
+                  <div>
+                    <p className="font-medium text-navy-900">{d.title?.trim() || 'Platform due'}</p>
+                    <p className="text-xs text-navy-500 mt-0.5">{formatDate(d.created_at)} · {d.status}</p>
+                    {d.notes?.trim() ? <p className="text-sm text-navy-600 mt-1">{d.notes.trim()}</p> : null}
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="font-semibold text-navy-900">{formatINR(d.amount)}</span>
+                    {d.status === 'pending' ? (
+                      <button
+                        type="button"
+                        disabled={payingDueId === d.id}
+                        onClick={() => void payPlatformDue(d)}
+                        className="px-3 py-1.5 rounded-lg text-sm font-medium bg-accent-500 text-white hover:bg-accent-600 disabled:opacity-50"
+                      >
+                        {payingDueId === d.id ? 'Opening…' : 'Pay with Razorpay'}
+                      </button>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-navy-100 overflow-hidden" id="saas-orders">
@@ -1360,11 +1471,11 @@ export function SaasDashboard() {
           </h2>
           <div className="space-y-3">
             <div className="flex justify-between text-sm">
-              <span className="text-navy-500">Storefront orders</span>
+              <span className="text-navy-500">Paid storefront orders</span>
               <span className="font-semibold text-navy-900">{stats.orders}</span>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-navy-500">Storefront revenue</span>
+              <span className="text-navy-500">Collected storefront revenue</span>
               <span className="font-semibold text-navy-900">{formatINR(stats.revenue)}</span>
             </div>
             <div className="flex justify-between text-sm">

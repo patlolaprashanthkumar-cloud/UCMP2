@@ -6,6 +6,8 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { notifyStoreBasketUpdated } from '../../lib/storeEvents';
 import { storeSellableUnits } from '../../lib/storeInventory';
+import { invokeEdgeFunction } from '../../lib/edgeFunctions';
+import { loadRazorpayScript, openRazorpayModal } from '../../lib/razorpayCheckout';
 import type { Product, StoreCartItem, OrderPaymentTiming, StoreDeliveryAddress } from '../../types';
 import type { StoreOutletContext } from './storeTypes';
 
@@ -263,45 +265,114 @@ export function StoreCheckoutPage() {
       /* ignore */
     }
 
-    const payStatus = paymentTiming === 'prepaid' ? 'paid' : 'pending';
     const snapshot = selectedAddress ? shippingSnapshotFromAddress(selectedAddress) : null;
 
-    for (const line of lines) {
-      let lineReseller: string | null = null;
-      if (line.offered_by_reseller_id) lineReseller = line.offered_by_reseller_id;
-      else if (sessionReseller) lineReseller = sessionReseller;
+    if (paymentTiming === 'postpaid') {
+      for (const line of lines) {
+        let lineReseller: string | null = null;
+        if (line.offered_by_reseller_id) lineReseller = line.offered_by_reseller_id;
+        else if (sessionReseller) lineReseller = sessionReseller;
 
-      const { error } = await supabase.from('orders').insert({
-        buyer_id: user.id,
-        product_id: line.product_id,
-        quantity: line.quantity,
-        total_amount: line.unit_price * line.quantity,
-        status: 'confirmed',
+        const { error } = await supabase.from('orders').insert({
+          buyer_id: user.id,
+          product_id: line.product_id,
+          quantity: line.quantity,
+          total_amount: line.unit_price * line.quantity,
+          status: 'confirmed',
+          tenant_id: tenant.id,
+          affiliate_id: affiliateId,
+          reseller_id: lineReseller,
+          payment_timing: 'postpaid',
+          payment_status: 'pending',
+          customer_email: customerEmail.trim() || null,
+          customer_phone: customerPhone.trim() || null,
+          shipping_snapshot: snapshot,
+          size: line.size,
+          order_kind: 'storefront',
+        });
+        if (error) {
+          toast(error.message, 'error');
+          setPlacing(false);
+          return;
+        }
+        if (line.fromCartLineId) {
+          await supabase.from('store_cart_items').delete().eq('id', line.fromCartLineId);
+        }
+      }
+
+      notifyStoreBasketUpdated();
+      toast('Order placed successfully!');
+      setPlacing(false);
+      navigate(`/store/${slug}/account`);
+      return;
+    }
+
+    try {
+      const idempotencyKey = crypto.randomUUID();
+      const edgeLines = lines.map((line) => {
+        let lineReseller: string | null = null;
+        if (line.offered_by_reseller_id) lineReseller = line.offered_by_reseller_id;
+        else if (sessionReseller) lineReseller = sessionReseller;
+        return {
+          product_id: line.product_id,
+          quantity: line.quantity,
+          size: line.size,
+          offered_by_reseller_id: lineReseller,
+          purchase_intent: line.purchase_intent,
+          cart_line_id: line.fromCartLineId ?? null,
+        };
+      });
+
+      const created = await invokeEdgeFunction<{
+        session_id: string;
+        razorpay_order_id: string;
+        key_id: string;
+        amount: number;
+        currency: string;
+      }>('create-razorpay-order', {
         tenant_id: tenant.id,
+        idempotency_key: idempotencyKey,
+        lines: edgeLines,
         affiliate_id: affiliateId,
-        reseller_id: lineReseller,
-        payment_timing: paymentTiming,
-        payment_status: payStatus,
+        fallback_reseller_id: sessionReseller,
         customer_email: customerEmail.trim() || null,
         customer_phone: customerPhone.trim() || null,
         shipping_snapshot: snapshot,
-        size: line.size,
-        order_kind: 'storefront',
       });
-      if (error) {
-        toast(error.message, 'error');
-        setPlacing(false);
-        return;
-      }
-      if (line.fromCartLineId) {
-        await supabase.from('store_cart_items').delete().eq('id', line.fromCartLineId);
-      }
-    }
 
-    notifyStoreBasketUpdated();
-    toast('Order placed successfully!');
-    setPlacing(false);
-    navigate(`/store/${slug}/account`);
+      await loadRazorpayScript();
+
+      openRazorpayModal({
+        keyId: created.key_id,
+        orderId: created.razorpay_order_id,
+        name: tenant.store_name || 'Store checkout',
+        description: `Pay ${formatINR(created.amount / 100)}`,
+        prefillEmail: customerEmail.trim() || user.email || undefined,
+        prefillContact: customerPhone.trim() || undefined,
+        themeColor: accent,
+        onSuccess: async (resp) => {
+          try {
+            await invokeEdgeFunction('verify-razorpay-payment', {
+              session_id: created.session_id,
+              razorpay_order_id: resp.razorpay_order_id,
+              razorpay_payment_id: resp.razorpay_payment_id,
+              razorpay_signature: resp.razorpay_signature,
+            });
+            notifyStoreBasketUpdated();
+            toast('Payment successful! Your order is confirmed.');
+            navigate(`/store/${slug}/account`);
+          } catch (err) {
+            toast(err instanceof Error ? err.message : 'Verification failed', 'error');
+          } finally {
+            setPlacing(false);
+          }
+        },
+        onDismiss: () => setPlacing(false),
+      });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not start payment', 'error');
+      setPlacing(false);
+    }
   }
 
   if (!user) {
@@ -442,7 +513,7 @@ export function StoreCheckoutPage() {
             </button>
           </div>
           <p className="text-xs text-[var(--sf-muted)] mt-2">
-            Prepaid marks payment as received. Postpaid keeps payment pending until you confirm (e.g. cash on delivery).
+            Prepaid checkout uses Razorpay (cards, UPI, etc.). Postpaid keeps payment pending until you confirm (e.g. cash on delivery).
           </p>
         </div>
         <div>

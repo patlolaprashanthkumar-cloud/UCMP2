@@ -50,6 +50,9 @@ export interface Order {
   shipping_snapshot: Record<string, unknown> | null;
   razorpay_order_id: string | null;
   razorpay_payment_id: string | null;
+  /** none | razorpay | manual — how payment was collected */
+  payment_provider?: 'none' | 'razorpay' | 'manual';
+  checkout_session_id?: string | null;
   tenant_id: string | null;
   /** storefront (default) or B2B catalog procurement from SaaS dashboard */
   order_kind?: OrderKind;
@@ -131,6 +134,20 @@ export interface SaasTenant {
   store_about?: string;
   /** Public storefront terms & conditions (plain text). */
   store_terms?: string;
+}
+
+export interface SaasTenantPlatformDue {
+  id: string;
+  tenant_id: string;
+  amount: number;
+  currency: string;
+  status: 'pending' | 'paid' | 'waived';
+  title: string;
+  notes: string;
+  created_at: string;
+  paid_at: string | null;
+  razorpay_order_id?: string | null;
+  razorpay_payment_id?: string | null;
 }
 
 export interface StoreDeliveryAddress {
