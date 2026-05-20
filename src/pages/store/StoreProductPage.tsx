@@ -313,7 +313,9 @@ export function StoreProductPage() {
           <p className="text-[var(--sf-muted)] leading-relaxed mb-8 whitespace-pre-line">{product.description}</p>
           {showResellerListing ? (
             <p className="text-sm text-[var(--sf-fg)] mb-6 rounded-xl border border-[var(--sf-border)] bg-stone-50 p-3">
-              This listing is offered by an independent reseller. You pay the price above; the store fulfills the product.
+              This listing is credited to a reseller partner. You pay <strong>{tenant.store_name}</strong> at checkout
+              (cards, UPI, COD, etc., depending on what the store offers); the store fulfills the order. Any reseller
+              margin is settled between the store and the reseller — you are not charged by the reseller separately.
             </p>
           ) : null}
 

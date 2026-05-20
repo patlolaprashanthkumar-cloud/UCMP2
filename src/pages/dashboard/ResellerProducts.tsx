@@ -3,7 +3,7 @@ import { Search, Share2, ShoppingBag, Package } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { supabase } from '../../lib/supabase';
-import { formatINR, getStatusColor } from '../../lib/format';
+import { formatINR, formatDate, getStatusColor } from '../../lib/format';
 import { Pagination } from '../../components/ui/Pagination';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { TableSkeleton } from '../../components/ui/LoadingSkeleton';
@@ -11,12 +11,22 @@ import type { Product, Order } from '../../types';
 
 const PER_PAGE = 20;
 
+type ResellerAttributedOrder = Order & {
+  product?: { name: string; price: number } | null;
+  buyer?: { name: string } | null;
+  store?: { store_name: string } | null;
+};
+
+function roundInr2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 export function ResellerProducts() {
   const { user } = useAuth();
   const { toast } = useToast();
 
   const [products, setProducts] = useState<Product[]>([]);
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [orders, setOrders] = useState<ResellerAttributedOrder[]>([]);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
   const [categories, setCategories] = useState<string[]>([]);
@@ -64,11 +74,14 @@ export function ResellerProducts() {
     setOrdersLoading(true);
     const { data, error } = await supabase
       .from('orders')
-      .select('*, product:products(name, price), buyer:profiles!orders_buyer_id_fkey(name)')
+      .select(
+        '*, product:products(name, price), buyer:profiles!orders_buyer_id_fkey(name), store:saas_tenants!orders_tenant_id_fkey(store_name)',
+      )
       .eq('reseller_id', user?.id)
+      .eq('order_kind', 'storefront')
       .order('created_at', { ascending: false });
 
-    if (!error) setOrders(data || []);
+    if (!error) setOrders((data as ResellerAttributedOrder[]) || []);
     setOrdersLoading(false);
   }, [user?.id]);
 
@@ -163,37 +176,89 @@ export function ResellerProducts() {
         </>
       )}
 
-      {/* My Orders */}
-      <h2 className="text-xl font-bold text-navy-900 mt-10 mb-4">My Orders</h2>
+      {/* Attributed sales & margins */}
+      <h2 className="text-xl font-bold text-navy-900 mt-10 mb-2">Attributed sales &amp; margins</h2>
+      <p className="text-sm text-gray-600 mb-4 max-w-3xl">
+        Settlement for your margin is with the store — the customer paid the store, not you directly. Amounts below come
+        from each order snapshot when available; older rows may show an estimate or a dash.
+      </p>
       {ordersLoading ? (
         <TableSkeleton />
       ) : orders.length === 0 ? (
-        <EmptyState icon={<ShoppingBag className="w-8 h-8 text-navy-300" />} title="No orders yet" description="Share products to start earning from reselling." />
+        <EmptyState
+          icon={<ShoppingBag className="w-8 h-8 text-navy-300" />}
+          title="No attributed storefront sales yet"
+          description="When buyers check out with your reseller link or listing, those orders will appear here."
+        />
       ) : (
         <div className="overflow-x-auto bg-white rounded-lg border border-gray-200">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-navy-900">
               <tr>
-                <th className="text-left px-4 py-3 font-semibold">Buyer</th>
+                <th className="text-left px-4 py-3 font-semibold">Date</th>
+                <th className="text-left px-4 py-3 font-semibold">Store</th>
                 <th className="text-left px-4 py-3 font-semibold">Product</th>
                 <th className="text-center px-4 py-3 font-semibold">Qty</th>
-                <th className="text-center px-4 py-3 font-semibold">Status</th>
-                <th className="text-right px-4 py-3 font-semibold">My Earning</th>
+                <th className="text-right px-4 py-3 font-semibold">Customer paid</th>
+                <th className="text-right px-4 py-3 font-semibold">Store base</th>
+                <th className="text-right px-4 py-3 font-semibold">Your margin</th>
+                <th className="text-center px-4 py-3 font-semibold">Fulfillment</th>
+                <th className="text-center px-4 py-3 font-semibold">Payment</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {orders.map((o) => {
-                const prod = (o as any).product;
-                const earning = o.total_amount - (prod?.price || 0) * (o.quantity || 1);
+                const prod = o.product;
+                const qty = o.quantity || 1;
+                const storeBaseRaw = o.store_base_line_total;
+                const marginRaw = o.reseller_margin_total;
+                const fallbackStoreBase =
+                  prod?.price != null ? roundInr2(Number(prod.price) * qty) : null;
+                const storeBaseLabel =
+                  storeBaseRaw != null
+                    ? formatINR(Number(storeBaseRaw))
+                    : fallbackStoreBase != null
+                    ? formatINR(fallbackStoreBase)
+                    : '—';
+                let marginLabel: string;
+                if (marginRaw != null) {
+                  marginLabel = formatINR(Number(marginRaw));
+                } else if (storeBaseRaw != null) {
+                  marginLabel = formatINR(Math.max(0, roundInr2(o.total_amount - Number(storeBaseRaw))));
+                } else if (fallbackStoreBase != null) {
+                  marginLabel = formatINR(Math.max(0, roundInr2(o.total_amount - fallbackStoreBase)));
+                } else {
+                  marginLabel = '—';
+                }
                 return (
                   <tr key={o.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-navy-900">{(o as any).buyer?.name || '—'}</td>
-                    <td className="px-4 py-3 text-navy-900">{prod?.name || '—'}</td>
-                    <td className="px-4 py-3 text-center text-gray-600">{o.quantity || 1}</td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(o.status)}`}>{o.status}</span>
+                    <td className="px-4 py-3 text-navy-700 whitespace-nowrap">{formatDate(o.created_at)}</td>
+                    <td className="px-4 py-3 text-navy-900 max-w-[120px] truncate" title={o.store?.store_name}>
+                      {o.store?.store_name?.trim() || '—'}
                     </td>
-                    <td className="px-4 py-3 text-right font-semibold text-orange-500">{formatINR(Math.max(earning, 0))}</td>
+                    <td className="px-4 py-3 text-navy-900 max-w-[140px] truncate">{prod?.name || '—'}</td>
+                    <td className="px-4 py-3 text-center text-gray-600">{qty}</td>
+                    <td className="px-4 py-3 text-right font-medium text-navy-900">{formatINR(o.total_amount)}</td>
+                    <td className="px-4 py-3 text-right text-navy-800">{storeBaseLabel}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-orange-600">{marginLabel}</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(o.status)}`}>
+                        {o.status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                          o.payment_status === 'paid'
+                            ? 'bg-green-100 text-green-700'
+                            : o.payment_status === 'pending'
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-gray-100 text-gray-700'
+                        }`}
+                      >
+                        {o.payment_status}
+                      </span>
+                    </td>
                   </tr>
                 );
               })}

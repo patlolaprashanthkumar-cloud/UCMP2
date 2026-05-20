@@ -454,7 +454,7 @@ export function StoreCatalogPage() {
                             ) : null}
                             <div className="mt-3 flex items-baseline gap-2 flex-wrap">
                               <span className="text-xl font-bold text-[var(--sf-fg)]">{formatINR(sellPrice)}</span>
-                              <span className="text-xs text-[var(--sf-muted)]">incl. margin</span>
+                              <span className="text-xs text-[var(--sf-muted)]">incl. reseller margin; you pay the store</span>
                             </div>
                             <span
                               className="mt-4 inline-flex text-sm font-semibold items-center gap-1"

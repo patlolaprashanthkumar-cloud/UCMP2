@@ -10,7 +10,7 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { TableSkeleton } from '../../components/ui/LoadingSkeleton';
 import { invokeEdgeFunction } from '../../lib/edgeFunctions';
 import { loadRazorpayScript, openRazorpayModal } from '../../lib/razorpayCheckout';
-import type { Product } from '../../types';
+import type { Product, Role } from '../../types';
 
 const categories = ['All', 'Electronics', 'Fashion', 'Home', 'Health', 'Food', 'Books', 'Other'];
 const PAGE_SIZE = 20;
@@ -56,18 +56,26 @@ export function ProductsPage() {
     loadProducts();
   }
 
+  /** Multiple stores can list the same product — never use maybeSingle() here. */
+  async function resolveTenantIdForBuyNow(productId: string, role: Role, userId: string): Promise<string | null> {
+    const { data: links, error } = await supabase.from('tenant_products').select('tenant_id').eq('product_id', productId);
+    if (error || !links?.length) return null;
+    const rows = links as { tenant_id: string }[];
+    if (role === 'SAAS_OWNER') {
+      const { data: myTenant } = await supabase.from('saas_tenants').select('id').eq('owner_id', userId).maybeSingle();
+      if (myTenant?.id) {
+        const own = rows.find((r) => r.tenant_id === myTenant.id);
+        if (own) return own.tenant_id;
+      }
+    }
+    return rows[0].tenant_id;
+  }
+
   async function handleOrder(product: Product) {
     if (!user) return;
-    const { data: linkRow } = await supabase
-      .from('tenant_products')
-      .select('tenant_id')
-      .eq('product_id', product.id)
-      .limit(1)
-      .maybeSingle();
-    const row: { tenant_id?: string } | null = linkRow;
-    const tenantId = row?.tenant_id;
+    const tenantId = await resolveTenantIdForBuyNow(product.id, user.role, user.id);
     if (!tenantId) {
-      toast('This product is not available on a tenant storefront.', 'error');
+      toast('This product is not listed on any store yet, or your store does not list it.', 'error');
       return;
     }
     const { data: trow } = await supabase
@@ -130,8 +138,16 @@ export function ProductsPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <h1 className="page-header">{isShop ? 'Shop' : 'Product Catalog'}</h1>
-        <p className="text-sm text-navy-500">{total} products available</p>
+        <div>
+          <h1 className="page-header">{isShop ? 'Shop' : 'Product Catalog'}</h1>
+          {user?.role === 'SAAS_OWNER' ? (
+            <p className="text-xs text-navy-500 mt-1 max-w-xl">
+              Buy Now uses Razorpay and uses <strong>your</strong> store when this product is in your catalog; otherwise
+              it uses another store that lists it.
+            </p>
+          ) : null}
+        </div>
+        <p className="text-sm text-navy-500 shrink-0">{total} products available</p>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-3">

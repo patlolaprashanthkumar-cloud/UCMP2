@@ -15,6 +15,16 @@ function isUuid(s: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
 }
 
+function digitCountInPhone(s: string): number {
+  return (s.match(/\d/g) ?? []).length;
+}
+
+/** At least 10 digits (typical mobile); allow formatting characters. */
+function isValidCheckoutPhone(s: string): boolean {
+  const n = digitCountInPhone(s);
+  return n >= 10 && n <= 15;
+}
+
 type CheckoutLine = {
   product_id: string;
   quantity: number;
@@ -25,6 +35,35 @@ type CheckoutLine = {
   purchase_intent: string | null;
   unit_price: number;
 };
+
+function roundInr2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/** Match Edge validateStoreCheckoutLines: margin only when line is explicitly attributed to a reseller with priced margin. */
+function storefrontOrderMarginTotals(
+  line: CheckoutLine,
+  lineReseller: string | null,
+): { store_base_line_total: number; reseller_margin_total: number } {
+  const storeBaseUnit = roundInr2(line.product.price);
+  let marginUnit = 0;
+  if (
+    line.purchase_intent !== 'resale_stock' &&
+    line.offered_by_reseller_id &&
+    lineReseller === line.offered_by_reseller_id
+  ) {
+    marginUnit = Math.max(0, roundInr2(line.unit_price - storeBaseUnit));
+  }
+  const qty = line.quantity;
+  const store_base_line_total = roundInr2(storeBaseUnit * qty);
+  let reseller_margin_total = roundInr2(marginUnit * qty);
+  const lineTotal = roundInr2(line.unit_price * qty);
+  const combined = roundInr2(store_base_line_total + reseller_margin_total);
+  if (Math.abs(combined - lineTotal) > 0.005) {
+    reseller_margin_total = roundInr2(lineTotal - store_base_line_total);
+  }
+  return { store_base_line_total, reseller_margin_total };
+}
 
 export function StoreCheckoutPage() {
   const { tenant, slug } = useOutletContext<StoreOutletContext>();
@@ -46,6 +85,13 @@ export function StoreCheckoutPage() {
   useEffect(() => {
     if (user?.email) setCustomerEmail((e) => e || user.email);
   }, [user?.email]);
+
+  useEffect(() => {
+    const addr = selectedAddressId ? addresses.find((a) => a.id === selectedAddressId) : undefined;
+    const p = addr?.phone?.trim();
+    if (!p) return;
+    setCustomerPhone((prev) => (prev.trim() ? prev : p));
+  }, [selectedAddressId, addresses]);
 
   useEffect(() => {
     let cancel = false;
@@ -247,6 +293,13 @@ export function StoreCheckoutPage() {
 
   async function placeOrder() {
     if (!user || !lines || lines.length === 0) return;
+
+    const phoneTrim = customerPhone.trim();
+    if (!isValidCheckoutPhone(phoneTrim)) {
+      toast('Enter a valid phone number (at least 10 digits).', 'error');
+      return;
+    }
+
     setPlacing(true);
 
     let affiliateId: string | null = null;
@@ -268,36 +321,63 @@ export function StoreCheckoutPage() {
     const snapshot = selectedAddress ? shippingSnapshotFromAddress(selectedAddress) : null;
 
     if (paymentTiming === 'postpaid') {
+      const postpaidOrderIds: string[] = [];
       for (const line of lines) {
         let lineReseller: string | null = null;
         if (line.offered_by_reseller_id) lineReseller = line.offered_by_reseller_id;
         else if (sessionReseller) lineReseller = sessionReseller;
 
-        const { error } = await supabase.from('orders').insert({
-          buyer_id: user.id,
-          product_id: line.product_id,
-          quantity: line.quantity,
-          total_amount: line.unit_price * line.quantity,
-          status: 'confirmed',
-          tenant_id: tenant.id,
-          affiliate_id: affiliateId,
-          reseller_id: lineReseller,
-          payment_timing: 'postpaid',
-          payment_status: 'pending',
-          customer_email: customerEmail.trim() || null,
-          customer_phone: customerPhone.trim() || null,
-          shipping_snapshot: snapshot,
-          size: line.size,
-          order_kind: 'storefront',
-        });
-        if (error) {
-          toast(error.message, 'error');
+        const lineTotals = storefrontOrderMarginTotals(line, lineReseller);
+        const { data: inserted, error } = await supabase
+          .from('orders')
+          .insert({
+            buyer_id: user.id,
+            product_id: line.product_id,
+            quantity: line.quantity,
+            total_amount: roundInr2(line.unit_price * line.quantity),
+            store_base_line_total: lineTotals.store_base_line_total,
+            reseller_margin_total: lineTotals.reseller_margin_total,
+            status: 'confirmed',
+            tenant_id: tenant.id,
+            affiliate_id: affiliateId,
+            reseller_id: lineReseller,
+            payment_timing: 'postpaid',
+            payment_status: 'pending',
+            customer_email: customerEmail.trim() || null,
+            customer_phone: phoneTrim,
+            shipping_snapshot: snapshot,
+            size: line.size,
+            order_kind: 'storefront',
+          })
+          .select('id')
+          .single();
+        if (error || !inserted?.id) {
+          toast(error?.message ?? 'Order failed', 'error');
           setPlacing(false);
           return;
         }
+        postpaidOrderIds.push(inserted.id as string);
         if (line.fromCartLineId) {
           await supabase.from('store_cart_items').delete().eq('id', line.fromCartLineId);
         }
+      }
+
+      try {
+        const bookRes = await invokeEdgeFunction<{
+          results?: { order_id: string; ok: boolean; error?: string }[];
+        }>('book-nimbuspost-orders', { order_ids: postpaidOrderIds });
+        const failed = bookRes.results?.filter((r) => !r.ok) ?? [];
+        if (failed.length) {
+          toast(
+            `Order placed. ${failed.length} line(s) could not book courier yet — retry from your SaaS dashboard (Nimbuspost).`,
+            'warning',
+          );
+        }
+      } catch {
+        toast(
+          'Order placed. Courier booking can be retried from the store dashboard (Nimbuspost section) if needed.',
+          'info',
+        );
       }
 
       notifyStoreBasketUpdated();
@@ -336,7 +416,7 @@ export function StoreCheckoutPage() {
         affiliate_id: affiliateId,
         fallback_reseller_id: sessionReseller,
         customer_email: customerEmail.trim() || null,
-        customer_phone: customerPhone.trim() || null,
+        customer_phone: phoneTrim,
         shipping_snapshot: snapshot,
       });
 
@@ -348,7 +428,7 @@ export function StoreCheckoutPage() {
         name: tenant.store_name || 'Store checkout',
         description: `Pay ${formatINR(created.amount / 100)}`,
         prefillEmail: customerEmail.trim() || user.email || undefined,
-        prefillContact: customerPhone.trim() || undefined,
+        prefillContact: phoneTrim,
         themeColor: accent,
         onSuccess: async (resp) => {
           try {
@@ -417,21 +497,33 @@ export function StoreCheckoutPage() {
       <p className="text-[var(--sf-muted)] mb-8">Review your order and payment preference.</p>
 
       <ul className="space-y-3 mb-8">
-        {lines.map((line) => (
-          <li
-            key={`${line.product_id}|${line.size ?? ''}|${line.offered_by_reseller_id ?? ''}|${line.purchase_intent ?? ''}|${line.fromCartLineId || 'd'}`}
-            className="flex justify-between gap-4 text-sm border border-[var(--sf-border)] rounded-xl p-4 bg-[var(--sf-surface)]"
-          >
-            <span className="text-[var(--sf-fg)] font-medium">
-              {line.product.name}
-              {line.size ? ` · ${line.size}` : ''} × {line.quantity}
-              {line.purchase_intent === 'resale_stock' ? (
-                <span className="block text-xs text-amber-700 font-normal">Resale stock (base price)</span>
-              ) : null}
-            </span>
-            <span className="font-bold shrink-0">{formatINR(line.unit_price * line.quantity)}</span>
-          </li>
-        ))}
+        {lines.map((line) => {
+          const showResellerPayNote =
+            line.purchase_intent !== 'resale_stock' &&
+            (Boolean(line.offered_by_reseller_id) ||
+              roundInr2(line.unit_price) > roundInr2(line.product.price));
+          return (
+            <li
+              key={`${line.product_id}|${line.size ?? ''}|${line.offered_by_reseller_id ?? ''}|${line.purchase_intent ?? ''}|${line.fromCartLineId || 'd'}`}
+              className="flex justify-between gap-4 text-sm border border-[var(--sf-border)] rounded-xl p-4 bg-[var(--sf-surface)]"
+            >
+              <span className="text-[var(--sf-fg)] font-medium">
+                {line.product.name}
+                {line.size ? ` · ${line.size}` : ''} × {line.quantity}
+                {line.purchase_intent === 'resale_stock' ? (
+                  <span className="block text-xs text-amber-700 font-normal">Resale stock (base price)</span>
+                ) : null}
+                {showResellerPayNote ? (
+                  <span className="block text-xs text-[var(--sf-muted)] font-normal mt-1">
+                    Price includes any reseller margin; you pay {tenant.store_name || 'this store'} only — not the
+                    reseller directly.
+                  </span>
+                ) : null}
+              </span>
+              <span className="font-bold shrink-0">{formatINR(line.unit_price * line.quantity)}</span>
+            </li>
+          );
+        })}
       </ul>
 
       <div className="rounded-xl border border-[var(--sf-border)] bg-[var(--sf-surface)] p-4 mb-6 space-y-4">
@@ -526,12 +618,17 @@ export function StoreCheckoutPage() {
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-[var(--sf-fg)] mb-1">Phone (optional)</label>
+          <label className="block text-sm font-medium text-[var(--sf-fg)] mb-1">
+            Phone <span className="text-red-600">*</span>
+          </label>
           <input
             type="tel"
+            required
+            autoComplete="tel"
             value={customerPhone}
             onChange={(e) => setCustomerPhone(e.target.value)}
             className="w-full px-3 py-2 rounded-xl border border-[var(--sf-border)] bg-white"
+            placeholder="10-digit mobile number"
           />
         </div>
       </div>

@@ -1,14 +1,43 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.57.4";
+import { bookNimbuspostForOrder } from "./bookNimbuspost.ts";
 
 export type StoredSessionLine = {
   product_id: string;
   quantity: number;
   unit_price_inr: number;
+  /** Catalog base unit price (INR) at checkout, before reseller margin. */
+  store_base_unit_price_inr?: number;
+  /** Extra INR per unit owed to reseller; 0 when not a margin line. */
+  reseller_margin_unit_inr?: number;
   size: string | null;
   offered_by_reseller_id: string | null;
   purchase_intent: string | null;
   cart_line_id: string | null;
 };
+
+/** Derive base / margin units from persisted line JSON (new sessions include both; legacy may omit). */
+function baseMarginUnitsFromLine(line: StoredSessionLine): { baseU: number; marginU: number } {
+  const b = line.store_base_unit_price_inr;
+  const m = line.reseller_margin_unit_inr;
+  if (b != null && m != null) {
+    return { baseU: Number(b), marginU: Number(m) };
+  }
+  if (b != null) {
+    const baseU = Number(b);
+    return {
+      baseU,
+      marginU: Math.max(0, Math.round((line.unit_price_inr - baseU) * 100) / 100),
+    };
+  }
+  if (m != null) {
+    const marginU = Number(m);
+    return {
+      baseU: Math.round((line.unit_price_inr - marginU) * 100) / 100,
+      marginU,
+    };
+  }
+  return { baseU: line.unit_price_inr, marginU: 0 };
+}
 
 export async function fulfillStoreCheckoutSession(
   admin: SupabaseClient,
@@ -75,6 +104,13 @@ export async function fulfillStoreCheckoutSession(
 
   for (const line of lines) {
     const lineTotal = Math.round(line.unit_price_inr * line.quantity * 100) / 100;
+    const { baseU, marginU } = baseMarginUnitsFromLine(line);
+    let storeBaseLineTotal = Math.round(baseU * line.quantity * 100) / 100;
+    let resellerMarginTotal = Math.round(marginU * line.quantity * 100) / 100;
+    const combined = Math.round((storeBaseLineTotal + resellerMarginTotal) * 100) / 100;
+    if (Math.abs(combined - lineTotal) > 0.005) {
+      resellerMarginTotal = Math.round((lineTotal - storeBaseLineTotal) * 100) / 100;
+    }
     let affiliateCommission: number | null = null;
     let commissionNote: string | null = null;
     if (hasAffiliate && session.affiliate_id) {
@@ -85,11 +121,13 @@ export async function fulfillStoreCheckoutSession(
     const resellerId =
       line.offered_by_reseller_id ?? session.fallback_reseller_id ?? null;
 
-    const { error: insErr } = await admin.from("orders").insert({
+    const { data: inserted, error: insErr } = await admin.from("orders").insert({
       buyer_id: session.buyer_id,
       product_id: line.product_id,
       quantity: line.quantity,
       total_amount: lineTotal,
+      store_base_line_total: storeBaseLineTotal,
+      reseller_margin_total: resellerMarginTotal,
       status: "confirmed",
       tenant_id: session.tenant_id,
       affiliate_id: session.affiliate_id,
@@ -107,10 +145,15 @@ export async function fulfillStoreCheckoutSession(
       checkout_session_id: sessionId,
       affiliate_commission_amount: affiliateCommission,
       affiliate_commission_note: commissionNote,
-    });
+    }).select("id").single();
 
-    if (insErr) {
-      return { ok: false, error: insErr.message };
+    if (insErr || !inserted?.id) {
+      return { ok: false, error: insErr?.message ?? "Order insert failed" };
+    }
+
+    const booked = await bookNimbuspostForOrder(admin, inserted.id as string);
+    if (!booked.ok) {
+      console.error("bookNimbuspostForOrder failed", inserted.id, booked.error);
     }
 
     if (line.cart_line_id) {

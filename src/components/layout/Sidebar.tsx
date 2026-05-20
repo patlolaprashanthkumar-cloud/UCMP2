@@ -19,7 +19,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { label: 'Dashboard', path: '/dashboard', icon: <LayoutDashboard className="w-5 h-5" />, roles: ['VENDOR', 'SAAS_OWNER', 'ADMIN'] },
   { label: 'Profile', path: '/dashboard/profile', icon: <User className="w-5 h-5" />, roles: ['VENDOR', 'SAAS_OWNER'] },
-  { label: 'Products', path: '/dashboard/products', icon: <Package className="w-5 h-5" />, roles: ['VENDOR', 'ADMIN'] },
+  { label: 'Products', path: '/dashboard/products', icon: <Package className="w-5 h-5" />, roles: ['VENDOR', 'ADMIN', 'SAAS_OWNER'] },
   { label: 'My Products', path: '/dashboard/my-products', icon: <Package className="w-5 h-5" />, roles: ['VENDOR'] },
   { label: 'Orders', path: '/dashboard/orders', icon: <ShoppingCart className="w-5 h-5" />, roles: ['VENDOR'] },
   { label: 'Wallet', path: '/dashboard/wallet', icon: <Wallet className="w-5 h-5" />, roles: ['VENDOR', 'SAAS_OWNER'] },

@@ -15,6 +15,7 @@ import type {
   Product,
   TenantProduct,
   Order,
+  OrderCarrierShipment,
   SaasVendorCatalogDue,
   SaasTenantPlatformDue,
 } from '../../types';
@@ -24,12 +25,32 @@ import {
   Store, Crown, Activity, ExternalLink, Palette, Save,
   UserPlus, Trash2, ShoppingCart, DollarSign, Users, ArrowUpRight,
   ImagePlus, Package, Plus, Search, Link2, Share2, TrendingUp, ShoppingBag,
+  Truck,
 } from 'lucide-react';
+
+function firstCarrierShipment(o: { order_carrier_shipments?: OrderCarrierShipment[] | null }): OrderCarrierShipment | undefined {
+  const c = o.order_carrier_shipments;
+  if (!c) return undefined;
+  return Array.isArray(c) ? c[0] : c;
+}
+
+const NIMBUS_FORM_DEFAULT = {
+  enabled: false,
+  api_email: '',
+  api_password: '',
+  hasStoredPassword: false,
+  warehouse_id: '',
+  default_weight_grams: 500,
+  default_length_cm: 10,
+  default_width_cm: 10,
+  default_height_cm: 10,
+};
 
 type TenantOrderRow = Order & {
   buyer?: { name: string; email: string } | null;
   product?: { name: string } | null;
   affiliate?: { name: string; email: string } | null;
+  order_carrier_shipments?: OrderCarrierShipment[] | null;
 };
 
 type CatalogModalState = null | { mode: 'add'; product: Product } | { mode: 'increase'; line: TenantProduct };
@@ -65,6 +86,9 @@ export function SaasDashboard() {
     procurementOrders: 0,
     procurementRevenue: 0,
     catalogCount: 0,
+    platformPaidTotal: 0,
+    affiliateCommissionsAccrued: 0,
+    resellerMarginsToSettle: 0,
   });
   const [vendorCatalog, setVendorCatalog] = useState<Product[]>([]);
   const [storeLines, setStoreLines] = useState<TenantProduct[]>([]);
@@ -83,6 +107,9 @@ export function SaasDashboard() {
   const [catalogSubmitting, setCatalogSubmitting] = useState(false);
   const [platformDues, setPlatformDues] = useState<SaasTenantPlatformDue[]>([]);
   const [payingDueId, setPayingDueId] = useState<string | null>(null);
+  const [nimbus, setNimbus] = useState(NIMBUS_FORM_DEFAULT);
+  const [savingNimbus, setSavingNimbus] = useState(false);
+  const [bookingOrderId, setBookingOrderId] = useState<string | null>(null);
 
   const location = useLocation();
 
@@ -125,28 +152,50 @@ export function SaasDashboard() {
       const lines = (tps || []) as unknown as TenantProduct[];
       setStoreLines(lines);
 
-      const { data: kindRows } = await supabase
+      const { data: orderMetrics } = await supabase
         .from('orders')
-        .select('total_amount, order_kind, payment_status')
+        .select('total_amount, order_kind, payment_status, affiliate_commission_amount, reseller_margin_total, reseller_id')
         .eq('tenant_id', t.id);
 
-      const rows = kindRows || [];
-      const storefrontRows = rows.filter((r) => r.order_kind !== 'catalog_procurement');
+      const metrics = orderMetrics || [];
+      const storefrontRows = metrics.filter((r) => r.order_kind !== 'catalog_procurement');
       const paidStorefront = storefrontRows.filter((r) => r.payment_status === 'paid');
-      const procRows = rows.filter((r) => r.order_kind === 'catalog_procurement');
+      const procRows = metrics.filter((r) => r.order_kind === 'catalog_procurement');
+      const paidProcurement = procRows.filter((r) => r.payment_status === 'paid');
+      const affiliateCommissionsAccrued = paidStorefront.reduce(
+        (s, row) => s + Number(row.affiliate_commission_amount ?? 0),
+        0,
+      );
+      const resellerMarginsToSettle = paidStorefront.reduce(
+        (s, row) => s + (row.reseller_id ? Number(row.reseller_margin_total ?? 0) : 0),
+        0,
+      );
+
+      const { data: platformDueRows } = await supabase
+        .from('saas_tenant_platform_dues')
+        .select('*')
+        .eq('tenant_id', t.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      const duesList = (platformDueRows as SaasTenantPlatformDue[]) || [];
+      const platformPaidTotal = duesList.filter((d) => d.status === 'paid').reduce((s, d) => s + Number(d.amount), 0);
 
       setStats({
         orders: paidStorefront.length,
         revenue: paidStorefront.reduce((s, row) => s + Number(row.total_amount), 0),
-        procurementOrders: procRows.length,
-        procurementRevenue: procRows.reduce((s, row) => s + Number(row.total_amount), 0),
+        procurementOrders: paidProcurement.length,
+        procurementRevenue: paidProcurement.reduce((s, row) => s + Number(row.total_amount), 0),
         catalogCount: lines.length,
+        platformPaidTotal,
+        affiliateCommissionsAccrued,
+        resellerMarginsToSettle,
       });
 
       const { data: ordData } = await supabase
         .from('orders')
         .select(
-          '*, buyer:profiles!buyer_id(name, email), product:products(name), affiliate:profiles!affiliate_id(name, email)',
+          '*, buyer:profiles!buyer_id(name, email), product:products(name), affiliate:profiles!affiliate_id(name, email), order_carrier_shipments(awb, courier_name, delivery_status, last_error, label_url, updated_at)',
         )
         .eq('tenant_id', t.id)
         .order('created_at', { ascending: false })
@@ -174,13 +223,29 @@ export function SaasDashboard() {
         .limit(100);
       setSaasCatalogDues((duesRows as unknown as SaasVendorCatalogDue[]) || []);
 
-      const { data: platformDueRows } = await supabase
-        .from('saas_tenant_platform_dues')
+      setPlatformDues(duesList);
+
+      const { data: np } = await supabase
+        .from('tenant_nimbuspost_settings')
         .select('*')
         .eq('tenant_id', t.id)
-        .order('created_at', { ascending: false })
-        .limit(50);
-      setPlatformDues((platformDueRows as SaasTenantPlatformDue[]) || []);
+        .maybeSingle();
+      if (np) {
+        const row = np as typeof np & { api_password?: string };
+        setNimbus({
+          enabled: !!np.enabled,
+          api_email: np.api_email ?? '',
+          api_password: '',
+          hasStoredPassword: !!(row.api_password && String(row.api_password).trim()),
+          warehouse_id: np.warehouse_id ?? '',
+          default_weight_grams: Number(np.default_weight_grams) || 500,
+          default_length_cm: Number(np.default_length_cm) || 10,
+          default_width_cm: Number(np.default_width_cm) || 10,
+          default_height_cm: Number(np.default_height_cm) || 10,
+        });
+      } else {
+        setNimbus({ ...NIMBUS_FORM_DEFAULT });
+      }
     } else {
       setMembers([]);
       setVendorCatalog([]);
@@ -189,9 +254,94 @@ export function SaasDashboard() {
       setAffiliateCommissionEdits({});
       setSaasCatalogDues([]);
       setPlatformDues([]);
-      setStats({ orders: 0, revenue: 0, procurementOrders: 0, procurementRevenue: 0, catalogCount: 0 });
+      setNimbus({ ...NIMBUS_FORM_DEFAULT });
+      setStats({
+        orders: 0,
+        revenue: 0,
+        procurementOrders: 0,
+        procurementRevenue: 0,
+        catalogCount: 0,
+        platformPaidTotal: 0,
+        affiliateCommissionsAccrued: 0,
+        resellerMarginsToSettle: 0,
+      });
     }
     setLoading(false);
+  };
+
+  const saveNimbusSettings = async () => {
+    if (!tenant) return;
+    if (nimbus.enabled && !nimbus.api_email.trim()) {
+      toast('Enter Nimbuspost API email (from your Nimbuspost API user).', 'error');
+      return;
+    }
+    if (nimbus.enabled && !nimbus.hasStoredPassword && !nimbus.api_password.trim()) {
+      toast('Enter the API password for that user.', 'error');
+      return;
+    }
+    setSavingNimbus(true);
+    try {
+      const base = {
+        tenant_id: tenant.id,
+        enabled: nimbus.enabled,
+        api_email: nimbus.api_email.trim(),
+        warehouse_id: nimbus.warehouse_id.trim() || null,
+        default_weight_grams: Math.max(1, Number(nimbus.default_weight_grams) || 500),
+        default_length_cm: Number(nimbus.default_length_cm) || 10,
+        default_width_cm: Number(nimbus.default_width_cm) || 10,
+        default_height_cm: Number(nimbus.default_height_cm) || 10,
+        updated_at: new Date().toISOString(),
+      };
+      const { data: cur } = await supabase
+        .from('tenant_nimbuspost_settings')
+        .select('tenant_id')
+        .eq('tenant_id', tenant.id)
+        .maybeSingle();
+      if (cur) {
+        const upd: Record<string, unknown> = { ...base };
+        if (nimbus.api_password.trim()) upd.api_password = nimbus.api_password.trim();
+        const { error } = await supabase.from('tenant_nimbuspost_settings').update(upd).eq('tenant_id', tenant.id);
+        if (error) throw new Error(error.message);
+      } else {
+        const { error } = await supabase.from('tenant_nimbuspost_settings').insert({
+          ...base,
+          api_password: nimbus.api_password.trim() || '',
+        });
+        if (error) throw new Error(error.message);
+      }
+      toast('Nimbuspost settings saved.', 'success');
+      setNimbus((prev) => ({
+        ...prev,
+        api_password: '',
+        hasStoredPassword: prev.hasStoredPassword || !!nimbus.api_password.trim(),
+      }));
+      await fetchData();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Save failed', 'error');
+    } finally {
+      setSavingNimbus(false);
+    }
+  };
+
+  const retryNimbusBooking = async (orderId: string) => {
+    if (!nimbus.enabled) {
+      toast('Enable Nimbuspost and save credentials first.', 'error');
+      return;
+    }
+    setBookingOrderId(orderId);
+    try {
+      const res = await invokeEdgeFunction<
+        { ok?: boolean; results?: { order_id: string; ok: boolean; error?: string }[] }
+      >('book-nimbuspost-orders', { order_ids: [orderId] });
+      const row = res.results?.find((r) => r.order_id === orderId);
+      if (row && !row.ok) toast(row.error ?? 'Booking failed', 'error');
+      else toast('Booking completed.', 'success');
+      await fetchData();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Booking failed', 'error');
+    } finally {
+      setBookingOrderId(null);
+    }
   };
 
   useEffect(() => { fetchData(); }, [user]);
@@ -782,7 +932,14 @@ export function SaasDashboard() {
         <StatCard title="Plan" value={tenant.subscription_plan === 'pro' ? 'Pro' : 'Starter'} icon={<Crown className="w-5 h-5" />} color="navy" to="/dashboard/saas#saas-subscription" />
         <StatCard title="Status" value={tenant.is_active ? 'Active' : 'Inactive'} icon={<Activity className="w-5 h-5" />} color={tenant.is_active ? 'success' : 'navy'} to="/dashboard/saas#saas-subscription" />
         <StatCard title="Paid storefront orders" value={String(stats.orders)} icon={<ShoppingCart className="w-5 h-5" />} color="blue" to="/dashboard/saas#saas-orders" />
-        <StatCard title="Collected storefront revenue" value={formatINR(stats.revenue)} icon={<DollarSign className="w-5 h-5" />} color="accent" to="/dashboard/saas#saas-orders" />
+        <StatCard
+          title="Collected storefront revenue"
+          value={formatINR(stats.revenue)}
+          icon={<DollarSign className="w-5 h-5" />}
+          color="accent"
+          to="/dashboard/saas#saas-orders"
+          subtitle={`${formatINR(stats.resellerMarginsToSettle)} reseller margins to settle (paid orders)`}
+        />
         <StatCard
           title="Catalog purchases"
           value={formatINR(stats.procurementRevenue)}
@@ -835,6 +992,116 @@ export function SaasDashboard() {
         </div>
       </div>
 
+      <div className="bg-white rounded-xl border border-navy-100 overflow-hidden" id="saas-nimbuspost">
+        <div className="px-6 py-4 border-b border-navy-100">
+          <h2 className="text-lg font-semibold text-navy-900 flex items-center gap-2">
+            <Truck className="w-5 h-5 text-accent-500" /> Nimbuspost delivery
+          </h2>
+          <p className="text-sm text-navy-500 mt-1">
+            Auto-book one shipment per storefront order line after checkout (prepaid and postpaid). Use API credentials from
+            Nimbuspost (Settings → API). Adjust packing defaults if couriers require weight or dimensions.
+          </p>
+        </div>
+        <div className="p-6 grid gap-4 md:grid-cols-2">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={nimbus.enabled}
+              onChange={(e) => setNimbus((v) => ({ ...v, enabled: e.target.checked }))}
+            />
+            <span className="text-sm font-medium text-navy-900">Enable automatic booking</span>
+          </label>
+          <div className="md:col-span-2 grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="text-xs font-medium text-navy-600">API user email</label>
+              <input
+                type="email"
+                value={nimbus.api_email}
+                onChange={(e) => setNimbus((v) => ({ ...v, api_email: e.target.value }))}
+                className="mt-1 w-full rounded-lg border border-navy-200 px-3 py-2 text-sm"
+                placeholder="api-user@example.com"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-navy-600">
+                API password {nimbus.hasStoredPassword ? '(leave blank to keep)' : ''}
+              </label>
+              <input
+                type="password"
+                value={nimbus.api_password}
+                onChange={(e) => setNimbus((v) => ({ ...v, api_password: e.target.value }))}
+                className="mt-1 w-full rounded-lg border border-navy-200 px-3 py-2 text-sm"
+                placeholder="••••••••"
+                autoComplete="new-password"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-navy-600">Warehouse ID (from Nimbuspost)</label>
+              <input
+                type="text"
+                value={nimbus.warehouse_id}
+                onChange={(e) => setNimbus((v) => ({ ...v, warehouse_id: e.target.value }))}
+                className="mt-1 w-full rounded-lg border border-navy-200 px-3 py-2 text-sm"
+                placeholder="Optional pickup / warehouse id"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs font-medium text-navy-600">Weight (g)</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={nimbus.default_weight_grams}
+                  onChange={(e) => setNimbus((v) => ({ ...v, default_weight_grams: Number(e.target.value) || 500 }))}
+                  className="mt-1 w-full rounded-lg border border-navy-200 px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-navy-600">L / W / H (cm)</label>
+                <div className="mt-1 flex gap-1">
+                  <input
+                    type="number"
+                    min={1}
+                    value={nimbus.default_length_cm}
+                    onChange={(e) => setNimbus((v) => ({ ...v, default_length_cm: Number(e.target.value) || 10 }))}
+                    className="w-full rounded-lg border border-navy-200 px-2 py-2 text-sm"
+                  />
+                  <input
+                    type="number"
+                    min={1}
+                    value={nimbus.default_width_cm}
+                    onChange={(e) => setNimbus((v) => ({ ...v, default_width_cm: Number(e.target.value) || 10 }))}
+                    className="w-full rounded-lg border border-navy-200 px-2 py-2 text-sm"
+                  />
+                  <input
+                    type="number"
+                    min={1}
+                    value={nimbus.default_height_cm}
+                    onChange={(e) => setNimbus((v) => ({ ...v, default_height_cm: Number(e.target.value) || 10 }))}
+                    className="w-full rounded-lg border border-navy-200 px-2 py-2 text-sm"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+          <p className="text-xs text-navy-500 md:col-span-2">
+            Webhook URL (optional): <code className="bg-navy-50 px-1 rounded">{'{{SUPABASE_URL}}/functions/v1/nimbuspost-webhook?secret=YOUR_SECRET'}</code>
+            — set <code className="bg-navy-50 px-1 rounded">NIMBUSPOST_WEBHOOK_SECRET</code> on the Edge function. See{' '}
+            <span className="font-medium">docs/NIMBUSPOST.md</span>.
+          </p>
+          <div className="md:col-span-2">
+            <button
+              type="button"
+              disabled={savingNimbus}
+              onClick={() => void saveNimbusSettings()}
+              className="px-4 py-2 rounded-lg bg-accent-500 text-white text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
+            >
+              {savingNimbus ? 'Saving…' : 'Save Nimbuspost settings'}
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div className="bg-white rounded-xl border border-navy-100 overflow-hidden" id="saas-orders">
         <div className="px-6 py-4 border-b border-navy-100">
           <h2 className="text-lg font-semibold text-navy-900 flex items-center gap-2">
@@ -857,8 +1124,11 @@ export function SaasDashboard() {
                   <th className="px-4 py-3 font-medium">Product</th>
                   <th className="px-4 py-3 font-medium">Customer</th>
                   <th className="px-4 py-3 font-medium">Amount</th>
+                  <th className="px-4 py-3 font-medium">Store base</th>
+                  <th className="px-4 py-3 font-medium">Reseller margin</th>
                   <th className="px-4 py-3 font-medium">Pay</th>
                   <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium min-w-[120px]">Delivery</th>
                   <th className="px-4 py-3 font-medium">Affiliate</th>
                   <th className="px-4 py-3 font-medium">Reseller</th>
                 </tr>
@@ -889,12 +1159,73 @@ export function SaasDashboard() {
                       )}
                     </td>
                     <td className="px-4 py-2.5 font-semibold text-navy-900 whitespace-nowrap">{formatINR(o.total_amount)}</td>
+                    <td className="px-4 py-2.5 text-navy-700 whitespace-nowrap">
+                      {o.order_kind === 'catalog_procurement'
+                        ? '—'
+                        : o.store_base_line_total != null
+                        ? formatINR(Number(o.store_base_line_total))
+                        : '—'}
+                    </td>
+                    <td className="px-4 py-2.5 text-navy-700 whitespace-nowrap">
+                      {o.order_kind === 'catalog_procurement'
+                        ? '—'
+                        : o.reseller_margin_total != null
+                        ? formatINR(Number(o.reseller_margin_total))
+                        : '—'}
+                    </td>
                     <td className="px-4 py-2.5 capitalize text-navy-700 whitespace-nowrap">
                       {o.payment_timing}
                       <span className="block text-xs text-navy-400">{o.payment_status}</span>
                     </td>
                     <td className="px-4 py-2.5">
                       <span className="text-xs font-medium capitalize px-2 py-0.5 rounded-full bg-navy-100 text-navy-700">{o.status}</span>
+                    </td>
+                    <td className="px-4 py-2.5 max-w-[160px] align-top text-xs">
+                      {o.order_kind === 'catalog_procurement' ? (
+                        '—'
+                      ) : (
+                        <>
+                          {(() => {
+                            const c = firstCarrierShipment(o);
+                            return (
+                              <>
+                                {c?.label_url ? (
+                                  <a
+                                    href={c.label_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-accent-600 font-medium hover:underline block mb-0.5"
+                                  >
+                                    Label
+                                  </a>
+                                ) : null}
+                                <span className="font-mono block text-navy-900">{c?.awb ?? '—'}</span>
+                                {c?.courier_name ? (
+                                  <span className="text-navy-600 block">{c.courier_name}</span>
+                                ) : null}
+                                {c?.delivery_status ? (
+                                  <span className="text-navy-500 block">{c.delivery_status}</span>
+                                ) : null}
+                                {c?.last_error && !c?.awb ? (
+                                  <span className="text-red-600 block line-clamp-3" title={c.last_error}>
+                                    {c.last_error}
+                                  </span>
+                                ) : null}
+                                {nimbus.enabled && !c?.awb ? (
+                                  <button
+                                    type="button"
+                                    disabled={bookingOrderId === o.id}
+                                    onClick={() => void retryNimbusBooking(o.id)}
+                                    className="mt-1 text-accent-600 font-medium hover:underline disabled:opacity-50"
+                                  >
+                                    {bookingOrderId === o.id ? 'Booking…' : 'Retry Nimbuspost'}
+                                  </button>
+                                ) : null}
+                              </>
+                            );
+                          })()}
+                        </>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-xs text-navy-500 font-mono">{o.affiliate_id ? o.affiliate_id.slice(0, 8) + '…' : '—'}</td>
                     <td className="px-4 py-2.5 text-xs text-navy-500 font-mono">{o.reseller_id ? o.reseller_id.slice(0, 8) + '…' : '—'}</td>
@@ -1470,20 +1801,31 @@ export function SaasDashboard() {
             <DollarSign className="w-5 h-5 text-accent-500" /> Revenue Summary
           </h2>
           <div className="space-y-3">
-            <div className="flex justify-between text-sm">
-              <span className="text-navy-500">Paid storefront orders</span>
-              <span className="font-semibold text-navy-900">{stats.orders}</span>
+            <div className="flex justify-between text-sm gap-4">
+              <span className="text-navy-500 shrink-0">Payments from customers (paid storefront)</span>
+              <span className="font-semibold text-navy-900 text-right">{formatINR(stats.revenue)}</span>
             </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-navy-500">Collected storefront revenue</span>
-              <span className="font-semibold text-navy-900">{formatINR(stats.revenue)}</span>
+            <p className="text-xs text-navy-400 -mt-2">{stats.orders} paid order line(s)</p>
+            <div className="flex justify-between text-sm gap-4">
+              <span className="text-navy-500 shrink-0">Reseller margins to settle (paid storefront, attributed)</span>
+              <span className="font-semibold text-navy-900 text-right">{formatINR(stats.resellerMarginsToSettle)}</span>
             </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-navy-500">Vendor catalog purchases</span>
-              <span className="font-semibold text-navy-900">
-                {stats.procurementOrders} · {formatINR(stats.procurementRevenue)}
-              </span>
+            <p className="text-xs text-navy-400 -mt-2">Snapshots from orders; settle with resellers outside the platform.</p>
+            <div className="flex justify-between text-sm gap-4">
+              <span className="text-navy-500 shrink-0">Affiliate commissions (on paid storefront)</span>
+              <span className="font-semibold text-navy-900 text-right">{formatINR(stats.affiliateCommissionsAccrued)}</span>
             </div>
+            <p className="text-xs text-navy-400 -mt-2">Recorded per order; settlement may be separate.</p>
+            <div className="flex justify-between text-sm gap-4">
+              <span className="text-navy-500 shrink-0">Vendor catalog procurement (you paid vendors)</span>
+              <span className="font-semibold text-navy-900 text-right">{formatINR(stats.procurementRevenue)}</span>
+            </div>
+            <p className="text-xs text-navy-400 -mt-2">{stats.procurementOrders} paid procurement line(s)</p>
+            <div className="flex justify-between text-sm gap-4">
+              <span className="text-navy-500 shrink-0">Paid to platform (admin invoices)</span>
+              <span className="font-semibold text-navy-900 text-right">{formatINR(stats.platformPaidTotal)}</span>
+            </div>
+            <p className="text-xs text-navy-400 -mt-2">Settled platform dues (e.g. Razorpay or marked paid).</p>
           </div>
         </div>
       </div>

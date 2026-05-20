@@ -19,6 +19,13 @@
    and enable at least `payment.captured`, `payment.authorized`, and `payment.failed`.
 5. Storefront **prepaid** checkout uses Razorpay after `create-razorpay-order`; **postpaid/COD** still creates pending orders from the app. Never put `RAZORPAY_KEY_SECRET` in Vite. The Checkout `key_id` is returned from `create-razorpay-order` / SaaS due create.
 
+### Nimbuspost (store delivery)
+
+1. Apply migration `20260531120000_nimbuspost_carrier.sql`.
+2. Deploy Edge Functions: **`book-nimbuspost-orders`**, **`nimbuspost-webhook`** (optional; for tracking callbacks).
+3. SaaS owners configure API user email/password and optional **warehouse id** in the dashboard (**Nimbuspost delivery**).
+4. See **[docs/NIMBUSPOST.md](docs/NIMBUSPOST.md)** for env vars, webhook URL, and aligning the booking payload with Nimbuspost’s current API.
+
 ### Marketplace payouts (MVP)
 
 Settlements to vendors, affiliates, and tenants can stay **ledger-only** using **`wallets`** / **`transactions`** while all customer funds land in the platform Razorpay balance; use manual payouts or a future Razorpay Route / splits design when you need automated splits.

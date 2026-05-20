@@ -8,6 +8,12 @@ function isUuid(s: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
 }
 
+function checkoutPhoneValid(s: string | null | undefined): boolean {
+  const t = (s ?? "").trim();
+  const digits = (t.match(/\d/g) ?? []).length;
+  return digits >= 10 && digits <= 15;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -46,6 +52,17 @@ Deno.serve(async (req) => {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    const customerPhoneTrim = body.customer_phone?.trim() ?? "";
+    if (!checkoutPhoneValid(customerPhoneTrim)) {
+      return new Response(
+        JSON.stringify({ error: "Valid phone number is required (at least 10 digits)." }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
     }
 
     let affiliateId: string | null = body.affiliate_id && isUuid(body.affiliate_id) &&
@@ -142,7 +159,7 @@ Deno.serve(async (req) => {
       affiliate_id: affiliateId,
       fallback_reseller_id: fallbackReseller,
       customer_email: body.customer_email?.trim() || user.email || null,
-      customer_phone: body.customer_phone?.trim() || null,
+      customer_phone: customerPhoneTrim,
       shipping_snapshot: body.shipping_snapshot ?? null,
       razorpay_order_id: rzOrder.id,
       status: "pending" as const,

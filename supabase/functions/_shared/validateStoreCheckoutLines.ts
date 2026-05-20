@@ -151,18 +151,18 @@ export async function buildValidatedStoreLines(
       size = null;
     }
 
-    let unitPrice = Number(p.price) || 0;
-    if (inp.purchase_intent === "resale_stock") {
-      unitPrice = Number(p.price) || 0;
-    } else if (inp.offered_by_reseller_id) {
+    const baseRaw = Number(p.price) || 0;
+    const storeBaseUnit = Math.round(baseRaw * 100) / 100;
+    let marginUnit = 0;
+    if (inp.purchase_intent !== "resale_stock" && inp.offered_by_reseller_id) {
       const add =
         marginMap.get(`${inp.product_id}:${inp.offered_by_reseller_id}`) ?? 0;
       if (add > 0) {
-        unitPrice = (Number(p.price) || 0) + add;
+        marginUnit = Math.round(Number(add) * 100) / 100;
       }
     }
 
-    unitPrice = Math.round(unitPrice * 100) / 100;
+    const unitPrice = Math.round((storeBaseUnit + marginUnit) * 100) / 100;
     const lineTotal = Math.round(unitPrice * qty * 100) / 100;
     amountInr += lineTotal;
 
@@ -170,6 +170,8 @@ export async function buildValidatedStoreLines(
       product_id: inp.product_id,
       quantity: qty,
       unit_price_inr: unitPrice,
+      store_base_unit_price_inr: storeBaseUnit,
+      reseller_margin_unit_inr: marginUnit,
       size: opts.length ? size : null,
       offered_by_reseller_id: inp.offered_by_reseller_id,
       purchase_intent: inp.purchase_intent,

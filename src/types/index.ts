@@ -42,6 +42,10 @@ export interface Order {
   reseller_id: string | null;
   quantity: number;
   total_amount: number;
+  /** Catalog base subtotal for this line (qty × store base unit at checkout). */
+  store_base_line_total?: number | null;
+  /** Reseller margin owed for this line; customer paid total_amount to the store. */
+  reseller_margin_total?: number | null;
   status: 'pending' | 'confirmed' | 'shipped' | 'delivered' | 'cancelled' | 'returned';
   payment_timing: OrderPaymentTiming;
   payment_status: OrderPaymentStatus;
@@ -62,6 +66,36 @@ export interface Order {
   affiliate_commission_note?: string | null;
   product?: Product;
   buyer?: Profile;
+  order_carrier_shipments?: OrderCarrierShipment[] | null;
+}
+
+export interface OrderCarrierShipment {
+  id?: string;
+  order_id?: string;
+  tenant_id?: string;
+  provider?: string;
+  awb: string | null;
+  courier_name: string | null;
+  label_url: string | null;
+  delivery_status: string | null;
+  last_error: string | null;
+  external_shipment_id?: string | null;
+  provider_meta?: Record<string, unknown> | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TenantNimbuspostSettings {
+  tenant_id: string;
+  enabled: boolean;
+  api_email: string;
+  api_password?: string;
+  warehouse_id: string | null;
+  default_weight_grams: number;
+  default_length_cm: number;
+  default_width_cm: number;
+  default_height_cm: number;
+  updated_at?: string;
 }
 
 export interface StoreCartItem {
